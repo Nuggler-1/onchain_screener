@@ -1,0 +1,27 @@
+from curl_cffi.requests import AsyncSession
+from config import GECKO_API_KEY, GECKO_CHAIN_NAMES, CHAIN_NAMES
+from typing import Literal
+from .http_client import HttpClient
+
+class Gecko(HttpClient): 
+    def __init__(self):
+        super().__init__(base_url="https://api.coingecko.com/api/v3/", headers={"x-cg-demo-api-key": GECKO_API_KEY})
+
+    def _chain_name_to_gecko(self, chain_name: Literal[*CHAIN_NAMES]):
+        return GECKO_CHAIN_NAMES[chain_name]
+
+    async def get_token_price_simple(self, chain_name: Literal[*CHAIN_NAMES], token_address: str) -> dict:
+        url = f"onchain/simple/networks/{self._chain_name_to_gecko(chain_name)}/token_price/{token_address}"
+        data = await self.get_json(url)
+        return float(data.get('data', {}).get('attributes', {}).get("token_prices", {}).get(token_address.lower(), 0))
+    
+    async def get_token_data_for_message(self, chain_name: Literal[*CHAIN_NAMES], token_address: str) -> dict:
+        url = f"onchain/networks/{self._chain_name_to_gecko(chain_name)}/tokens/{token_address}"
+        data = await self.get_json(url)
+        attributes = data.get('data', {}).get('attributes', {})
+        if not attributes:
+            return {}
+        mcap = attributes.get("market_cap_usd") or 0
+        volume = (attributes.get("volume_usd") or {}).get("h24") or 0
+        price = attributes.get("price_usd") or 0
+        return {"price": float(price), "mcap": float(mcap), "volume": float(volume)}

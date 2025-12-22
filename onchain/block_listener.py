@@ -1,0 +1,170 @@
+from .log_parser import EventParser
+from web3 import AsyncWeb3
+from typing import Callable, Literal
+from config import CHAIN_NAMES, WS_RPC
+from utils import get_logger
+import asyncio
+import json
+import websockets
+from tg_client import TelegramClient
+import traceback
+import time
+
+class BlockListenerEVM:
+
+    def __init__(
+        self, 
+        tg_client:TelegramClient, 
+        chain_name:Literal[*CHAIN_NAMES], 
+        token_address_list: list, 
+        target_events: list,
+    ):
+        
+        self.w3 = AsyncWeb3(AsyncWeb3.WebSocketProvider(WS_RPC[chain_name]))
+        self._ws_connection_check_interval = 5
+        self.token_address_list = token_address_list
+        self.target_events = target_events
+        self.chain_name = chain_name
+        self.tg_client = tg_client
+        self.logger = get_logger(f'{chain_name}')
+        self._max_addresses_per_request = 500
+        
+    @classmethod
+    async def create(
+        cls,
+        tg_client: TelegramClient,
+        chain_name: Literal[*CHAIN_NAMES],
+        token_address_list: list,
+        target_events: list,
+    ):
+        instance = cls(tg_client, chain_name, token_address_list, target_events)
+        await instance.w3.provider.connect()
+        asyncio.create_task(instance._ws_connection_checker())
+        return instance
+
+    def update_token_address_list(self, token_address_list: list):
+        self.token_address_list = token_address_list
+
+    async def _ws_connection_checker(self):
+        
+        while True:
+            try:
+                if not await self.w3.provider.is_connected():
+                    await self.w3.provider.connect()
+                    self.logger.info(f"WebSocket connection reestablished")
+                await asyncio.sleep(self._ws_connection_check_interval)
+            except Exception as e:
+                self.logger.error(f"WebSocket connection error: {str(e)}")
+                await self.tg_client.send_error_alert(
+                    "RPC WEBSCOKET DISCONNECTED",
+                    f"{self.chain_name} WebSocket connection error: {str(e)}",
+                )
+                await asyncio.sleep(self._ws_connection_check_interval)
+    
+    async def subscribe_new_blocks(self, callback:Callable):
+        """
+        Подписаться на новые блоки через WebSocket
+        Для каждого нового блока вызывает callback
+        передает в callback 
+        {
+            'token': token_address,
+            'from': from_address,
+            'to': to_address,
+            'amount': value
+        }
+        """
+        last_block = await self.w3.eth.block_number - 1
+        self.logger.info(f"Starting subscription from block {last_block + 1}")
+        
+        ws_url = WS_RPC[self.chain_name]
+        reconnect_delay = 5
+        
+        while True:
+            try:
+                async with websockets.connect(ws_url, ping_interval=20, ping_timeout=30) as ws:
+                    
+                    subscribe_msg = {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "eth_subscribe",
+                        "params": ["newHeads"]
+                    }
+                    await ws.send(json.dumps(subscribe_msg))
+                    
+                    sub_response = await ws.recv()
+                    sub_data = json.loads(sub_response)
+                    sub_id = sub_data.get("result")
+                    self.logger.info(f"Subscribed to newHeads: {sub_id}")
+
+                    while True:
+                        message = await ws.recv()
+                        data = json.loads(message)
+                        
+                        if data.get("method") == "eth_subscription":
+                            params = data.get("params", {})
+                            result = params.get("result", {})
+                            
+                            if "number" in result:
+                                current_block = int(result["number"], 16)
+                                
+                                self.logger.debug(f"getting data for blocks: {last_block} - {current_block}")
+
+                                if current_block > last_block:
+                                    try:
+                                        tasks = []
+                                        for i in range(0, len(self.token_address_list), self._max_addresses_per_request):
+                                            address_batch = self.token_address_list[i:i + self._max_addresses_per_request]
+                                            payload = {
+                                                "fromBlock": hex(last_block+1),
+                                                "toBlock": hex(current_block),
+                                                "address": address_batch,
+                                                "topics": self.target_events,
+                                            }
+                                            task = asyncio.create_task(self.w3.eth.get_logs(payload))
+                                            tasks.append(task)
+                                        all_logs = await asyncio.gather(*tasks)
+                                        all_logs = [log for logs in all_logs for log in logs]
+                                        all_txs = {}
+                                        for log in all_logs:
+                                            tx_hash = "0x" + log['transactionHash'].hex()
+                                            if tx_hash not in all_txs:
+                                                all_txs[tx_hash] = []
+                                            all_txs[tx_hash].append(log)
+                                        #t1 = time.perf_counter()
+                                        for tx_hash, tx_logs in all_txs.items():
+                                            events = EventParser.parse_tx_token_events_from_logs(tx_logs)
+                                            if events:
+                                                asyncio.create_task(callback(tx_hash, events))
+                                        #t2 = time.perf_counter()
+                                        #self.logger.debug(f"Scanning {len(all_txs)} txs in blocks {last_block}-{current_block} took {((t2-t1)*1000):.4f}ms")
+                                        last_block = current_block
+                                    except Exception as e:
+                                        error = traceback.format_exc()
+                                        self.logger.error(f"Error processing blocks: {str(e)}")
+                                        if 'invalid block range params' in error:
+                                            self.logger.error(f'invalid block range params {current_block} {last_block}')
+                                        await asyncio.sleep(1)
+                                
+            except (websockets.ConnectionClosed, websockets.ConnectionClosedError, ConnectionResetError) as e:
+                self.logger.warning(f"WebSocket disconnected: {str(e)}. Reconnecting in {reconnect_delay}s...")
+                await asyncio.sleep(reconnect_delay)
+            except Exception as e:
+                self.logger.error(f"Error in subscribe_new_blocks: {str(e)}")
+                await self.tg_client.send_error_alert(
+                    "BLOCK SUBSCRIPTION ERROR",
+                    f"{self.chain_name} Error: {str(e)}"
+                )
+                await asyncio.sleep(reconnect_delay)
+      
+        
+        
+
+
+        
+
+        
+
+
+
+
+    
