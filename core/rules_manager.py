@@ -16,7 +16,7 @@ class RulesManager:
                 if isinstance(raw, list) and len(raw) > 1:
                     return raw[1]
                 else:
-                    raise Exception(f"{type(raw)}")
+                    return {}
         except (FileNotFoundError, json.JSONDecodeError) as e:
             self.logger.error(f"Failed to load token_data.json: {e}")
             return {}
