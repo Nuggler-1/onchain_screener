@@ -145,6 +145,10 @@ class WebsocketClient:
         
         if not await self._connect():
             self.logger.error(f"Failed to connect to WS server, exiting")
+            self.tg_client.send_error_alert(
+                f"Failed to connect to controller WS server after {RECONNECT_ATTEMPTS} attempts",
+                "WS connection failed"
+            )
             return
         
         # Start receiver loop after initial connection
