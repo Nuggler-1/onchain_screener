@@ -13,7 +13,7 @@ class RulesManager:
         try:
             with open(SUPPLY_DATA_PATH, 'r', encoding='utf-8') as f:
                 raw = json.load(f)
-                if isinstance(raw, list):
+                if isinstance(raw, list) and len(raw) > 1:
                     return raw[1]
                 else:
                     raise Exception(f"{type(raw)}")
