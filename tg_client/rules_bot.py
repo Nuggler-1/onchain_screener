@@ -6,9 +6,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from typing import Callable, Optional
 from web3 import AsyncWeb3
-from config import MANAGER_TG_BOT_TOKEN, MANAGER_TG_BOT_IDS, RPC, CHAIN_NAMES
+from config import MANAGER_TG_BOT_TOKEN, MANAGER_TG_BOT_IDS, RPC, CHAIN_NAMES, BANNED_PATH, SUPPLY_DATA_PATH
 from utils import get_logger
 import asyncio
+import json
 
 logger = get_logger("RULES_BOT")
 
@@ -45,6 +46,14 @@ class ShowRuleStates(StatesGroup):
     waiting_token_address = State()
 
 
+class BanTokenStates(StatesGroup):
+    waiting_token_address = State()
+
+
+class UnbanTokenStates(StatesGroup):
+    waiting_token_address = State()
+
+
 def get_main_menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Add Rule", callback_data="menu_add_rule"),
@@ -52,6 +61,9 @@ def get_main_menu_keyboard():
         [InlineKeyboardButton(text="✏️ Update Token", callback_data="menu_update_token"),
          InlineKeyboardButton(text="📋 List Rules", callback_data="menu_list_rules")],
         [InlineKeyboardButton(text="🔍 Show Rule", callback_data="menu_show_rule")],
+        [InlineKeyboardButton(text="🚫 Ban Token", callback_data="menu_ban_token"),
+         InlineKeyboardButton(text="✅ Unban Token", callback_data="menu_unban_token")],
+        [InlineKeyboardButton(text="📜 Banned List", callback_data="menu_banned_list")],
     ])
 
 
@@ -111,10 +123,137 @@ class RulesBot:
             BotCommand(command="update_token", description="Update token data"),
             BotCommand(command="list_rules", description="List all rules"),
             BotCommand(command="show_rule", description="Show rule details"),
+            BotCommand(command="ban_token", description="Ban a token contract"),
+            BotCommand(command="unban_token", description="Unban a token contract"),
+            BotCommand(command="banned_list", description="Show banned tokens"),
             BotCommand(command="cancel", description="Cancel current operation"),
             BotCommand(command="help", description="Show help"),
         ]
         await self.bot.set_my_commands(commands)
+
+    def _load_banned_list(self) -> dict:
+        try:
+            with open(BANNED_PATH, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return {}
+                return data
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def _save_banned_list(self, banned_dict: dict):
+        with open(BANNED_PATH, 'w', encoding='utf-8') as f:
+            json.dump(banned_dict, f, indent=4)
+
+    def _add_to_banned(self, token_address: str) -> tuple:
+        """Add token to banned list with full data. Returns (success, token_data_dict, chains_list)."""
+        banned_dict = self._load_banned_list()
+        if token_address in banned_dict:
+            return False, {}, []
+        
+        token_info, chains = self._get_token_data_from_supply(token_address)
+        banned_dict[token_address] = {
+            "token_data": token_info,
+            "chains": chains
+        }
+        self._save_banned_list(banned_dict)
+        return True, token_info, chains
+
+    def _remove_from_banned(self, token_address: str) -> bool:
+        """Remove token from banned list and restore to token_data.json."""
+        banned_dict = self._load_banned_list()
+        if token_address not in banned_dict:
+            return False
+        
+        banned_entry = banned_dict[token_address]
+        token_info = banned_entry.get("token_data", {})
+        chains = banned_entry.get("chains", [])
+        
+        if token_info and chains:
+            self._restore_to_token_data(token_address, token_info, chains)
+        
+        del banned_dict[token_address]
+        self._save_banned_list(banned_dict)
+        return True
+
+    def _is_banned(self, token_address: str) -> bool:
+        banned_dict = self._load_banned_list()
+        return token_address in banned_dict
+
+    def _get_token_data_from_supply(self, token_address: str) -> tuple:
+        """Get token data from token_data.json. Returns (token_info_dict, chains_list)."""
+        try:
+            with open(SUPPLY_DATA_PATH, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            if not isinstance(data, list) or len(data) != 2:
+                return {}, []
+            
+            timestamp, token_data = data
+            token_info = {}
+            chains = []
+            
+            for chain_name in token_data.keys():
+                if token_address in token_data[chain_name]:
+                    if not token_info:
+                        token_info = token_data[chain_name][token_address].copy()
+                    chains.append(chain_name)
+            
+            return token_info, chains
+        except Exception as e:
+            logger.error(f"Error getting token data: {e}")
+            return {}, []
+
+    def _remove_from_token_data(self, token_address: str) -> int:
+        """Remove token from token_data.json across all chains. Returns count of removals."""
+        try:
+            with open(SUPPLY_DATA_PATH, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            if not isinstance(data, list) or len(data) != 2:
+                return 0
+            
+            timestamp, token_data = data
+            removed_count = 0
+            
+            for chain_name in list(token_data.keys()):
+                if token_address in token_data[chain_name]:
+                    del token_data[chain_name][token_address]
+                    removed_count += 1
+                    logger.info(f"Removed {token_address} from {chain_name} in token_data.json")
+            
+            if removed_count > 0:
+                with open(SUPPLY_DATA_PATH, 'w', encoding='utf-8') as f:
+                    json.dump([timestamp, token_data], f, indent=4)
+            
+            return removed_count
+        except Exception as e:
+            logger.error(f"Error removing token from token_data.json: {e}")
+            return 0
+
+    def _restore_to_token_data(self, token_address: str, token_info: dict, chains: list) -> bool:
+        """Restore token to token_data.json for specified chains."""
+        try:
+            with open(SUPPLY_DATA_PATH, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            if not isinstance(data, list) or len(data) != 2:
+                return False
+            
+            timestamp, token_data = data
+            
+            for chain_name in chains:
+                if chain_name in token_data:
+                    token_data[chain_name][token_address] = token_info.copy()
+                    logger.info(f"Restored {token_address} to {chain_name} in token_data.json")
+            
+            with open(SUPPLY_DATA_PATH, 'w', encoding='utf-8') as f:
+                json.dump([timestamp, token_data], f, indent=4)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error restoring token to token_data.json: {e}")
+            return False
 
     async def _get_decimals(self, token_address: str, chain_name: str) -> Optional[int]:
         try:
@@ -256,6 +395,116 @@ class RulesBot:
             await callback.answer()
             await callback.message.edit_text("🔍 *Show Rule*\n\nEnter token address:", parse_mode="Markdown", reply_markup=get_cancel_keyboard())
             await state.set_state(ShowRuleStates.waiting_token_address)
+
+        # ===== BANNED TOKENS =====
+        @self.router.callback_query(F.data == "menu_ban_token")
+        async def menu_ban_token(callback: CallbackQuery, state: FSMContext):
+            await state.clear()
+            await callback.answer()
+            await callback.message.edit_text("🚫 *Ban Token*\n\nEnter token address to ban:", parse_mode="Markdown", reply_markup=get_cancel_keyboard())
+            await state.set_state(BanTokenStates.waiting_token_address)
+
+        @self.router.callback_query(F.data == "menu_unban_token")
+        async def menu_unban_token(callback: CallbackQuery, state: FSMContext):
+            await state.clear()
+            await callback.answer()
+            await self._show_banned_tokens_page(callback.message, 0, edit=True)
+
+        @self.router.callback_query(F.data == "menu_banned_list")
+        async def menu_banned_list(callback: CallbackQuery, state: FSMContext):
+            await state.clear()
+            await callback.answer()
+            await self._show_banned_list(callback.message, edit=True)
+
+        @self.router.callback_query(F.data.startswith("bannedpage_"))
+        async def handle_banned_page(callback: CallbackQuery):
+            page = int(callback.data.replace("bannedpage_", ""))
+            await callback.answer()
+            await self._show_banned_tokens_page(callback.message, page, edit=True)
+
+        @self.router.callback_query(F.data.startswith("unban_"))
+        async def handle_unban_token(callback: CallbackQuery, state: FSMContext):
+            idx = int(callback.data.replace("unban_", ""))
+            banned_dict = self._load_banned_list()
+            banned_addresses = list(banned_dict.keys())
+            
+            if idx >= len(banned_addresses):
+                await callback.answer("Token not found")
+                return
+            
+            token_address = banned_addresses[idx]
+            banned_entry = banned_dict.get(token_address, {})
+            ticker = banned_entry.get("token_data", {}).get("ticker", "???")
+            chains = banned_entry.get("chains", [])
+            
+            success = self._remove_from_banned(token_address)
+            self.update_callback()
+            await callback.answer()
+            
+            if success:
+                await callback.message.edit_text(
+                    f"✅ Token unbanned and restored:\n"
+                    f"<b>{ticker.upper()}</b>\n"
+                    f"<code>{token_address}</code>\n"
+                    f"Restored to: {', '.join(chains) if chains else 'N/A'}",
+                    parse_mode="HTML",
+                    reply_markup=get_back_to_menu_keyboard()
+                )
+            else:
+                await callback.message.edit_text("❌ Failed to unban token", reply_markup=get_back_to_menu_keyboard())
+
+        @self.router.message(Command("ban_token"))
+        async def cmd_ban_token(message: Message, state: FSMContext):
+            if str(message.chat.id) not in self.chat_ids:
+                return
+            await state.clear()
+            await message.answer("🚫 *Ban Token*\n\nEnter token address to ban:", parse_mode="Markdown", reply_markup=get_cancel_keyboard())
+            await state.set_state(BanTokenStates.waiting_token_address)
+
+        @self.router.message(BanTokenStates.waiting_token_address)
+        async def process_ban_token_address(message: Message, state: FSMContext):
+            token_address = message.text.strip()
+            try:
+                token_address = AsyncWeb3.to_checksum_address(token_address)
+            except:
+                await message.answer("❌ Invalid address format. Enter a valid token address:", reply_markup=get_cancel_keyboard())
+                return
+            
+            if self._is_banned(token_address):
+                await message.answer(f"⚠️ Token already banned:\n`{token_address}`", parse_mode="Markdown", reply_markup=get_back_to_menu_keyboard())
+                await state.clear()
+                return
+            
+            success, token_info, chains = self._add_to_banned(token_address)
+            removed_count = self._remove_from_token_data(token_address)
+            self.update_callback()
+            
+            ticker = token_info.get("ticker", "???").upper()
+            chains_str = ", ".join(chains) if chains else "N/A"
+            
+            await message.answer(
+                f"✅ <b>Token Banned</b>\n\n"
+                f"Ticker: <b>{ticker}</b>\n"
+                f"Address: <code>{token_address}</code>\n"
+                f"Removed from: {chains_str}",
+                parse_mode="HTML",
+                reply_markup=get_back_to_menu_keyboard()
+            )
+            await state.clear()
+
+        @self.router.message(Command("unban_token"))
+        async def cmd_unban_token(message: Message, state: FSMContext):
+            if str(message.chat.id) not in self.chat_ids:
+                return
+            await state.clear()
+            await self._show_banned_tokens_page(message, 0, edit=False)
+
+        @self.router.message(Command("banned_list"))
+        async def cmd_banned_list(message: Message, state: FSMContext):
+            if str(message.chat.id) not in self.chat_ids:
+                return
+            await state.clear()
+            await self._show_banned_list(message, edit=False)
 
         # ===== ADD RULE =====
         @self.router.message(Command("add_rule"))
@@ -877,6 +1126,75 @@ class RulesBot:
             await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
         else:
             await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+
+    async def _show_banned_tokens_page(self, message: Message, page: int, edit: bool = False):
+        """Show paginated list of banned tokens with unban buttons."""
+        banned_dict = self._load_banned_list()
+        if not banned_dict:
+            if edit:
+                await message.edit_text("📭 No banned tokens.", reply_markup=get_back_to_menu_keyboard())
+            else:
+                await message.answer("📭 No banned tokens.", reply_markup=get_back_to_menu_keyboard())
+            return
+        
+        banned_items = list(banned_dict.items())
+        total_tokens = len(banned_items)
+        per_page = 5
+        total_pages = (total_tokens + per_page - 1) // per_page
+        page = max(0, min(page, total_pages - 1))
+        
+        start_idx = page * per_page
+        end_idx = min(start_idx + per_page, total_tokens)
+        page_items = banned_items[start_idx:end_idx]
+        
+        text = f"🚫 <b>Unban Token</b> (Page {page + 1}/{total_pages})\n\nSelect token to unban:\n\n"
+        
+        buttons = []
+        for i, (addr, data) in enumerate(page_items):
+            global_idx = start_idx + i
+            ticker = data.get("token_data", {}).get("ticker", "???").upper()
+            chains = data.get("chains", [])
+            chains_str = ", ".join(chains) if chains else "N/A"
+            text += f"{i + 1}. <b>{ticker}</b> ({chains_str})\n   <code>{addr}</code>\n\n"
+            buttons.append([InlineKeyboardButton(text=f"✅ Unban {ticker}", callback_data=f"unban_{global_idx}")])
+        
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(text="◀️ Prev", callback_data=f"bannedpage_{page - 1}"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton(text="Next ▶️", callback_data=f"bannedpage_{page + 1}"))
+        if nav_row:
+            buttons.append(nav_row)
+        buttons.append([InlineKeyboardButton(text="🏠 Back to Menu", callback_data="action_menu")])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        
+        if edit:
+            await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+        else:
+            await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+
+    async def _show_banned_list(self, message: Message, edit: bool = False):
+        """Show simple list of all banned tokens."""
+        banned_dict = self._load_banned_list()
+        if not banned_dict:
+            if edit:
+                await message.edit_text("📭 No banned tokens.", reply_markup=get_back_to_menu_keyboard())
+            else:
+                await message.answer("📭 No banned tokens.", reply_markup=get_back_to_menu_keyboard())
+            return
+        
+        text = f"📜 <b>Banned Tokens</b> ({len(banned_dict)} total)\n\n"
+        for i, (addr, data) in enumerate(banned_dict.items(), 1):
+            ticker = data.get("token_data", {}).get("ticker", "???").upper()
+            chains = data.get("chains", [])
+            chains_str = ", ".join(chains) if chains else "N/A"
+            text += f"{i}. <b>{ticker}</b> ({chains_str})\n   <code>{addr}</code>\n\n"
+        
+        if edit:
+            await message.edit_text(text, parse_mode="HTML", reply_markup=get_back_to_menu_keyboard())
+        else:
+            await message.answer(text, parse_mode="HTML", reply_markup=get_back_to_menu_keyboard())
 
     async def _finalize_rule(self, message: Message, state: FSMContext):
         data = await state.get_data()

@@ -4,6 +4,7 @@ from config import (
     CMC_API_KEY,
     PARSED_DATA_CHECK_DELAY_DAYS, 
     SUPPLY_DATA_PATH, 
+    BANNED_PATH,
     CACHE_UPDATE_BATCH_SIZE,
     CHAIN_NAMES,
     FORCE_UPDATE_ON_START,
@@ -211,6 +212,20 @@ class SupplyParser:
             self.logger.warning(f'Token data file not found, returning empty dict')
             return None, None
 
+    def _load_banned_list(self) -> dict:
+        try:
+            with open(BANNED_PATH, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return {}
+                return data
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def _is_banned(self, token_address: str) -> bool:
+        banned_dict = self._load_banned_list()
+        return token_address in banned_dict
+
     def _should_run_parse(self):
         if self.main_token_data is None:
             return True
@@ -315,6 +330,9 @@ class SupplyParser:
                         decimals_tasks.append((None, None, None))
                     else: 
                         address = Web3.to_checksum_address(address)
+                        if self._is_banned(address):
+                            self.logger.debug(f'Skipping banned token {address}')
+                            continue
                         decimals_tasks.append((self.helper_evm._get_token_decimals(address, chain_name), address, chain_name))
                     main_data_dict[chain_name][address] = {
                         'ticker': token.get('symbol', '').lower(),
