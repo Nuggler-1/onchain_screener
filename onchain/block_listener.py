@@ -27,7 +27,7 @@ class BlockListenerEVM:
         self.chain_name = chain_name
         self.tg_client = tg_client
         self.logger = get_logger(f'{chain_name}')
-        self._max_addresses_per_request = 500
+        self._max_addresses_per_request = 200
         
     @classmethod
     async def create(
@@ -143,6 +143,9 @@ class BlockListenerEVM:
                                         self.logger.error(f"Error processing blocks: {str(e)}")
                                         if 'invalid block range params' in error:
                                             self.logger.error(f'invalid block range params {current_block} {last_block}')
+                                        if "message too big" in error:
+                                            self.logger.error(f"message too big {current_block} {last_block}")
+                                            last_block = current_block
                                         await asyncio.sleep(1)
                                 
             except (websockets.ConnectionClosed, websockets.ConnectionClosedError, ConnectionResetError) as e:
