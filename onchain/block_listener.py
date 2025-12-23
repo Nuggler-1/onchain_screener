@@ -107,7 +107,7 @@ class BlockListenerEVM:
                             if "number" in result:
                                 current_block = int(result["number"], 16)
                                 
-                                self.logger.debug(f"getting data for blocks: {last_block} - {current_block}")
+                                #self.logger.debug(f"getting data for blocks: {last_block} - {current_block}")
 
                                 if current_block > last_block:
                                     try:
