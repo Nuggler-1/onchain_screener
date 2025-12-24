@@ -10,7 +10,9 @@ from config import (
     FORCE_UPDATE_ON_START,
     CMC_SEARCH_LISTS,
     WS_RPC, 
-    REQUEST_RETRY
+    REQUEST_RETRY,
+    MIN_MCAP, 
+    MIN_VOLUME
 )
 from curl_cffi.requests import AsyncSession
 from web3 import Web3
@@ -117,7 +119,7 @@ class SupplyParser:
     ):
         """additional_params - дополнительные параметры для запроса в формате key=value&key2=value2"""
 
-        url = f'https://api.coinmarketcap.com/data-api/v3/cryptocurrency/listing?start={range_start}&limit={range_end}&sortBy=rank&sortType=desc&cryptoType=all&tagType=all&audited=false&aux={aux}&{additional_params}'
+        url = f'https://api.coinmarketcap.com/data-api/v3/cryptocurrency/listing?start={range_start}&limit={range_end}&convert=USD&sortBy=rank&sortType=desc&cryptoType=all&tagType=all&audited=false&aux={aux}&{additional_params}'
 
         async with AsyncSession() as session: 
             response = await session.get(url, headers=self.headers)
@@ -279,16 +281,28 @@ class SupplyParser:
 
         raw_token_dict = {token['id']: token for token in token_list}
         unique_tokens = list(raw_token_dict.values())
-        parsed_token_list = [ 
-            {
-                'id': token.get('id'),
-                'name': token.get('name'),
-                'symbol': token.get('symbol'),
-                'circulating_supply': max(int(token.get('circulatingSupply')), int(token.get('selfReportedCirculatingSupply'))),
-                'total_supply': token.get('totalSupply'),
-            }
-            for token in unique_tokens
-        ]
+        parsed_token_list = []
+        for token in unique_tokens:
+            mcap = 0
+            volume = 0
+            for quote in token.get('quotes',[]): 
+                if quote.get("name", '') == "USD": 
+                    mcap = quote.get('marketCap')
+                    volume = quote.get('volume24h')
+            if not (mcap and volume): 
+                continue
+            if not (mcap > MIN_MCAP and volume >MIN_VOLUME): 
+                continue
+            parsed_token_list.append( 
+                {
+                    'id': token.get('id'),
+                    'name': token.get('name'),
+                    'symbol': token.get('symbol'),
+                    'circulating_supply': max(int(token.get('circulatingSupply')), int(token.get('selfReportedCirculatingSupply'))),
+                    'total_supply': token.get('totalSupply'),
+                }
+            )
+
         self.logger.info(f'Parsed {len(parsed_token_list)} tokens')
 
         main_data_dict = {

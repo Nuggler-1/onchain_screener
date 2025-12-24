@@ -170,6 +170,7 @@ progress.json
 !notes.txt
 *TP_cache.json
 *token_data.json
+*banned.json
 
 # Ignore specific file
 *test*
