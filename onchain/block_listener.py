@@ -115,7 +115,7 @@ class BlockListenerEVM:
                                         for i in range(0, len(self.token_address_list), self._max_addresses_per_request):
                                             address_batch = self.token_address_list[i:i + self._max_addresses_per_request]
                                             payload = {
-                                                "fromBlock": hex(last_block+1),
+                                                "fromBlock": hex(current_block-1),
                                                 "toBlock": hex(current_block),
                                                 "address": address_batch,
                                                 "topics": self.target_events,
