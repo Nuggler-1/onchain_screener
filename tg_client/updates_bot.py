@@ -4,6 +4,7 @@ Sends messages to Telegram if API credentials are configured, otherwise skips si
 """
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from parser import SupplyParser
 from utils import get_logger
 from typing import Optional
 from config import ALERT_TG_BOT_TOKEN, TECH_ALERTS_CHAT_ID, USER_ALERTS_CHAT_ID
@@ -92,12 +93,19 @@ class TelegramClient:
         if not self.enabled:
             return False
 
-        token_data = await self.gecko.get_token_data_for_message(signal['chain'].upper(), signal['contract'])
-        price = token_data.get('price', 0)
-        mcap = token_data.get('mcap', 0)
-        volume = token_data.get('volume', 0)
-        
+        #token_data = await self.gecko.get_token_data_for_message(signal['chain'].upper(), signal['contract'])
+        # price = token_data.get('price', 0)
+        # mcap = token_data.get('mcap', 0)
+        # volume = token_data.get('volume', 0)
         ticker = signal.get('ticker', '')
+        
+        token_data = SupplyParser()._get_cmc_quote_for_token_ticker(ticker)
+        mcap = token_data.get('market_cap',0)
+        if not mcap: 
+            mcap = token_data.get("fully_diluted_market_cap", 0)
+        price = token_data.get('price', 0)
+        volume = token_data.get('volume_24h', 0)
+
         chain = signal.get('chain', '')
         direction = signal.get('direction', '')
         event_type = signal.get('event_type', '')

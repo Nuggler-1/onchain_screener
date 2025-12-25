@@ -27,7 +27,7 @@ class BlockListenerEVM:
         self.chain_name = chain_name
         self.tg_client = tg_client
         self.logger = get_logger(f'{chain_name}')
-        self._max_addresses_per_request = 200
+        self._max_addresses_per_request = 50
         
     @classmethod
     async def create(
@@ -115,7 +115,7 @@ class BlockListenerEVM:
                                         for i in range(0, len(self.token_address_list), self._max_addresses_per_request):
                                             address_batch = self.token_address_list[i:i + self._max_addresses_per_request]
                                             payload = {
-                                                "fromBlock": hex(current_block-1),
+                                                "fromBlock": hex(last_block + 1),
                                                 "toBlock": hex(current_block),
                                                 "address": address_batch,
                                                 "topics": self.target_events,
@@ -139,11 +139,10 @@ class BlockListenerEVM:
                                         #self.logger.debug(f"Scanning {len(all_txs)} txs in blocks {last_block}-{current_block} took {((t2-t1)*1000):.4f}ms")
                                         last_block = current_block
                                     except Exception as e:
-                                        error = traceback.format_exc()
                                         self.logger.error(f"Error processing blocks: {str(e)}")
-                                        if 'invalid block range params' in error:
+                                        if 'invalid block range params' in str(e):
                                             self.logger.error(f'invalid block range params {current_block} {last_block}')
-                                        if "message too big" in error:
+                                        if "message too big" in str(e):
                                             self.logger.error(f"message too big {current_block} {last_block}")
                                             last_block = current_block
                                         await asyncio.sleep(1)

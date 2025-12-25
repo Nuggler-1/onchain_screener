@@ -126,6 +126,30 @@ class SupplyParser:
             response.raise_for_status() 
             data = response.json().get('data').get('cryptoCurrencyList')
         return data
+
+    async def _get_cmc_quote_for_token_ticker(self,token_ticker:str): 
+
+        url = f"https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest?symbol={token_ticker}&convert=USD"
+        headers = {
+            'X-CMC_PRO_API_KEY': CMC_API_KEY,
+            'Accept': 'application/json'
+        }
+        for _ in range(REQUEST_RETRY): 
+            try:
+                async with AsyncSession() as session: 
+                    response = await session.get(url, headers=headers)
+                    response.raise_for_status()
+                    data = response.json().get('data', {}).get(token_ticker.upper(), {})
+                    if len(data) < 1: 
+                        self.logger.error(f"No data returned from cmc")
+                        return {}
+                    data = data[0].get('quote', {}).get('USD',{})
+                    return data
+            except Exception as e:
+                if _ == REQUEST_RETRY - 1: 
+                    self.logger.error(f"Error getting CMC token data by ticker: {str(e)}")
+                    return {}
+                self.logger.warning(f"Error getting CMC token data by ticker: {str(e)}")
         
     async def _get_cmc_tokens_data_by_ids(self, token_ids: list):
 
