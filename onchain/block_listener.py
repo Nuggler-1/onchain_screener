@@ -27,7 +27,7 @@ class BlockListenerEVM:
         self.chain_name = chain_name
         self.tg_client = tg_client
         self.logger = get_logger(f'{chain_name}')
-        self._max_addresses_per_request = 50
+        self._max_addresses_per_request = 500
         
     @classmethod
     async def create(
@@ -61,6 +61,21 @@ class BlockListenerEVM:
                 )
                 await asyncio.sleep(self._ws_connection_check_interval)
     
+    async def _get_logs_for_block(self, block_num: int) -> list:
+        """Fetch logs for a single block, batching by address to avoid message size limits."""
+        all_logs = []
+        for i in range(0, len(self.token_address_list), self._max_addresses_per_request):
+            address_batch = self.token_address_list[i:i + self._max_addresses_per_request]
+            payload = {
+                "fromBlock": hex(block_num),
+                "toBlock": hex(block_num),
+                "address": address_batch,
+                "topics": self.target_events,
+            }
+            logs = await self.w3.eth.get_logs(payload)
+            all_logs.extend(logs)
+        return all_logs
+    
     async def subscribe_new_blocks(self, callback:Callable):
         """
         Подписаться на новые блоки через WebSocket
@@ -79,9 +94,9 @@ class BlockListenerEVM:
         ws_url = WS_RPC[self.chain_name]
         reconnect_delay = 5
         
-        while True:
-            try:
-                async with websockets.connect(ws_url, ping_interval=20, ping_timeout=30) as ws:
+        try:
+            async with websockets.connect(ws_url, ping_interval=20, ping_timeout=30) as ws:
+                while True:
                     
                     subscribe_msg = {
                         "jsonrpc": "2.0",
@@ -110,53 +125,39 @@ class BlockListenerEVM:
                                 #self.logger.debug(f"getting data for blocks: {last_block} - {current_block}")
 
                                 if current_block > last_block:
-                                    try:
-                                        tasks = []
-                                        for i in range(0, len(self.token_address_list), self._max_addresses_per_request):
-                                            address_batch = self.token_address_list[i:i + self._max_addresses_per_request]
-                                            payload = {
-                                                "fromBlock": hex(last_block + 1),
-                                                "toBlock": hex(current_block),
-                                                "address": address_batch,
-                                                "topics": self.target_events,
-                                            }
-                                            task = asyncio.create_task(self.w3.eth.get_logs(payload))
-                                            tasks.append(task)
-                                        all_logs = await asyncio.gather(*tasks)
-                                        all_logs = [log for logs in all_logs for log in logs]
-                                        all_txs = {}
-                                        for log in all_logs:
-                                            tx_hash = "0x" + log['transactionHash'].hex()
-                                            if tx_hash not in all_txs:
-                                                all_txs[tx_hash] = []
-                                            all_txs[tx_hash].append(log)
-                                        #t1 = time.perf_counter()
-                                        for tx_hash, tx_logs in all_txs.items():
-                                            events = EventParser.parse_tx_token_events_from_logs(tx_logs)
-                                            if events:
-                                                asyncio.create_task(callback(tx_hash, events))
-                                        #t2 = time.perf_counter()
-                                        #self.logger.debug(f"Scanning {len(all_txs)} txs in blocks {last_block}-{current_block} took {((t2-t1)*1000):.4f}ms")
-                                        last_block = current_block
-                                    except Exception as e:
-                                        self.logger.error(f"Error processing blocks: {str(e)}")
-                                        if 'invalid block range params' in str(e):
-                                            self.logger.error(f'invalid block range params {current_block} {last_block}')
-                                        if "message too big" in str(e):
-                                            self.logger.error(f"message too big {current_block} {last_block}")
-                                            last_block = current_block
-                                        await asyncio.sleep(1)
+                                    # Process blocks one at a time to avoid message too big errors
+                                    for block_num in range(last_block + 1, current_block + 1):
+                                        try:
+                                            all_logs = await self._get_logs_for_block(block_num)
+                                            all_txs = {}
+                                            for log in all_logs:
+                                                tx_hash = "0x" + log['transactionHash'].hex()
+                                                if tx_hash not in all_txs:
+                                                    all_txs[tx_hash] = []
+                                                all_txs[tx_hash].append(log)
+                                            for tx_hash, tx_logs in all_txs.items():
+                                                events = EventParser.parse_tx_token_events_from_logs(tx_logs)
+                                                if events:
+                                                    asyncio.create_task(callback(tx_hash, events))
+                                            last_block = block_num
+                                        except Exception as e:
+                                            self.logger.error(f"Error processing block {block_num}: {str(e)}")
+                                            if "message too big" in str(e):
+                                                self.logger.warning(f"Skipping block {block_num} due to message size")
+                                                last_block = block_num
+                                            await asyncio.sleep(0.1)
                                 
-            except (websockets.ConnectionClosed, websockets.ConnectionClosedError, ConnectionResetError) as e:
-                self.logger.warning(f"WebSocket disconnected: {str(e)}. Reconnecting in {reconnect_delay}s...")
-                await asyncio.sleep(reconnect_delay)
-            except Exception as e:
-                self.logger.error(f"Error in subscribe_new_blocks: {str(e)}")
-                await self.tg_client.send_error_alert(
-                    "BLOCK SUBSCRIPTION ERROR",
-                    f"{self.chain_name} Error: {str(e)}"
-                )
-                await asyncio.sleep(reconnect_delay)
+
+        except (websockets.ConnectionClosed, websockets.ConnectionClosedError, ConnectionResetError) as e:
+            self.logger.warning(f"WebSocket disconnected: {str(e)}. Reconnecting in {reconnect_delay}s...")
+            await asyncio.sleep(reconnect_delay)
+        except Exception as e:
+            self.logger.error(f"Error in subscribe_new_blocks: {str(e)}")
+            await self.tg_client.send_error_alert(
+                "BLOCK SUBSCRIPTION ERROR",
+                f"{self.chain_name} Error: {str(e)}"
+            )
+            await asyncio.sleep(reconnect_delay)
       
         
         

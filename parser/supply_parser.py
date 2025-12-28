@@ -302,7 +302,6 @@ class SupplyParser:
             self.logger.info(f'Fetching tokens list for {search_list_name}')
             token_list += await self._search_query(1, search_list['limit'], additional_params=search_list['params'])
         
-
         raw_token_dict = {token['id']: token for token in token_list}
         unique_tokens = list(raw_token_dict.values())
         parsed_token_list = []

@@ -99,7 +99,7 @@ class TelegramClient:
         # volume = token_data.get('volume', 0)
         ticker = signal.get('ticker', '')
         
-        token_data = SupplyParser()._get_cmc_quote_for_token_ticker(ticker)
+        token_data = await SupplyParser()._get_cmc_quote_for_token_ticker(ticker)
         mcap = token_data.get('market_cap',0)
         if not mcap: 
             mcap = token_data.get("fully_diluted_market_cap", 0)

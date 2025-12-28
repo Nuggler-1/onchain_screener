@@ -39,13 +39,13 @@ class EventDetectorEVM:
 
     def _filter_event(self, token_address: str, event_type:str, event_data:dict):
 
-        custom_rule = self.custom_rules.get(token_address, {}).get("event_rules",{}).get(event_type)
+        custom_rule = self.custom_rules.get(self.chain_name, {}).get(token_address, {}).get("event_rules",{}).get(event_type)
         auto_open = False
 
         if custom_rule: 
             auto_open = True
             message_tier = "Custom event"
-            custom_token_data = self.custom_rules.get(token_address, {}).get("token_data",{})
+            custom_token_data = self.custom_rules.get(self.chain_name, {}).get(token_address, {}).get("token_data",{})
             token_decimals = custom_token_data['decimals']
             token_amount_in_event = event_data['total']/10**token_decimals
             circ_supply = custom_token_data['circulating_supply']
