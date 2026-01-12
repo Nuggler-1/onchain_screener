@@ -94,9 +94,9 @@ class BlockListenerEVM:
         ws_url = WS_RPC[self.chain_name]
         reconnect_delay = 5
         
-        try:
-            async with websockets.connect(ws_url, ping_interval=20, ping_timeout=30) as ws:
-                while True:
+        while True:
+            try:
+                async with websockets.connect(ws_url, ping_interval=20, ping_timeout=30) as ws:
                     
                     subscribe_msg = {
                         "jsonrpc": "2.0",
@@ -122,7 +122,7 @@ class BlockListenerEVM:
                             if "number" in result:
                                 current_block = int(result["number"], 16)
                                 
-                                #self.logger.debug(f"getting data for blocks: {last_block} - {current_block}")
+                                self.logger.debug(f"getting data for blocks: {last_block} - {current_block}")
 
                                 if current_block > last_block:
                                     # Process blocks one at a time to avoid message too big errors
@@ -148,16 +148,16 @@ class BlockListenerEVM:
                                             await asyncio.sleep(0.1)
                                 
 
-        except (websockets.ConnectionClosed, websockets.ConnectionClosedError, ConnectionResetError) as e:
-            self.logger.warning(f"WebSocket disconnected: {str(e)}. Reconnecting in {reconnect_delay}s...")
-            await asyncio.sleep(reconnect_delay)
-        except Exception as e:
-            self.logger.error(f"Error in subscribe_new_blocks: {str(e)}")
-            await self.tg_client.send_error_alert(
-                "BLOCK SUBSCRIPTION ERROR",
-                f"{self.chain_name} Error: {str(e)}"
-            )
-            await asyncio.sleep(reconnect_delay)
+            except (websockets.ConnectionClosed, websockets.ConnectionClosedError, ConnectionResetError) as e:
+                self.logger.warning(f"WebSocket disconnected: {str(e)}. Reconnecting in {reconnect_delay}s...")
+                await asyncio.sleep(reconnect_delay)
+            except Exception as e:
+                self.logger.error(f"Error in subscribe_new_blocks: {str(e)}")
+                await self.tg_client.send_error_alert(
+                    "BLOCK SUBSCRIPTION ERROR",
+                    f"{self.chain_name} Error: {str(e)}"
+                )
+                await asyncio.sleep(reconnect_delay)
       
         
         
