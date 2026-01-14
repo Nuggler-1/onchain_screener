@@ -29,6 +29,7 @@ class WebsocketClient:
     async def _send_signal(self, message: dict):
         """Queue a message to be sent to the WS server"""
         await self._message_queue.put(message)
+        self.logger.info(f"Signal put to queue: {message}")
 
     async def _sender_loop(self):
         """Background task that sends queued messages to the WS server"""
