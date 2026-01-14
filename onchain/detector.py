@@ -4,7 +4,7 @@ from typing import Dict
 from config import CHAIN_NAMES
 from typing import Literal
 from .log_parser import EventParser
-from config import FILTER_CONFIG, EVENT_TRADE_DIRECTION
+from config import FILTER_CONFIG, EVENT_TRADE_DIRECTION, BINANCE_ALPHA_WALLETS
 from utils import Gecko, get_logger
 
 class EventDetectorEVM:
@@ -37,10 +37,52 @@ class EventDetectorEVM:
     def update_custom_rules(self, custom_rules: dict):
         self.custom_rules = custom_rules
 
-    def _filter_event(self, token_address: str, event_type:str, event_data:dict):
+    async def _detect_alpha(self, token_address:str, event_data:dict):
+        for transfer in event_data['transfers']:
+            if transfer['to'].lower() in BINANCE_ALPHA_WALLETS:
+                wallet_address = transfer['to']
+                wallet_index = BINANCE_ALPHA_WALLETS.index(transfer['to'].lower()) + 1
+                event_type = "binance_alpha"
+                token_decimals = self.token_data[token_address]['decimals']
+                token_amount_in_transfer = transfer['amount']/10**token_decimals
+
+                price = await self.gecko.get_token_price_simple(self.chain_name, token_address)
+                usd_size = price * token_amount_in_transfer
+
+                event_config = {}
+                for config in FILTER_CONFIG[event_type]:
+                    if not config['enabled']:
+                        continue 
+                    if config['min_usd_size'] <= usd_size < config['max_usd_size']:
+                        event_config = config
+                        break
+                
+                if not event_config:
+                    self.logger.warning(f"No config found for binance alpha event: usd_size={usd_size}, supply_percent_in_action={token_amount_in_transfer}, wallet_address={wallet_address}")
+                    return {}
+                
+                return {
+                    "direction": EVENT_TRADE_DIRECTION[event_type],
+                    "ticker": self.token_data[token_address]['ticker'],
+                    "contract": token_address,
+                    "event_type": event_type,
+                    "wallet_address": wallet_address,
+                    "wallet_index": wallet_index,
+                    "token_amount": token_amount_in_transfer,
+                    "usd_amount": usd_size,
+                    "auto_open": event_config.get('auto_open'), 
+                    "message_tier": event_config.get('message_tier')
+                }
+        return {}
+
+    async def _filter_event(self, token_address: str, event_type:str, event_data:dict):
 
         custom_rule = self.custom_rules.get(self.chain_name, {}).get(token_address, {}).get("event_rules",{}).get(event_type)
         auto_open = False
+        if self.chain_name == 'BSC':
+            alpha_signal = await self._detect_alpha(token_address, event_data)
+            if alpha_signal: 
+                return alpha_signal
 
         if custom_rule: 
             auto_open = True
@@ -90,8 +132,6 @@ class EventDetectorEVM:
             auto_open = event_config.get('auto_open')
             message_tier = event_config.get('message_tier') 
             
-            
-        
         return {
             "direction": trade_direction,
             "ticker": ticker,
@@ -147,7 +187,7 @@ class EventDetectorEVM:
         }
         for token_address, token_events in events.items():
             for event_type, event_data in token_events.items():
-                signal = self._filter_event(token_address, event_type, event_data)
+                signal = await self._filter_event(token_address, event_type, event_data)
                 if signal:
                     signals['signals'].append(signal)
         

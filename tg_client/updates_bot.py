@@ -123,8 +123,17 @@ class TelegramClient:
         
         message = ""
         message += f"*{escape_markdown(message_tier)}* | `{escape_markdown(ticker).upper()}` | {escape_markdown(chain.upper())}\n\n"
-        message += f"*Event:* {supply_percent:.2f}% circ. supply *{escape_markdown(event_type).lower()}ed*\n"
-        message += f"*Trade:* {arrow}\n\n"
+        if event_type == "binance_alpha":
+            usd_value = signal.get('usd_amount', 0)
+            token_amount = signal.get('token_amount', 0)
+            alpha_wallet = signal.get('wallet_address', '')
+            alpha_index_wallet = signal.get('wallet_index', 0)
+            message += f"*Tokens:* {token_amount:.2f}\n" 
+            message += f"*USD total:* ${usd_value:.2f}\n"
+            message += f"*Binance wallet:* [address #{alpha_index_wallet}](https://bscscan.com/address/{alpha_wallet})\n\n"
+        else:
+            message += f"*Event:* {supply_percent:.2f}% circ. supply *{escape_markdown(event_type).lower()}ed*\n" 
+            message += f"*Trade:* {arrow}\n\n"
         message += f"*Price:* ${price:.5f}\n"
         message += f"*MCap:* ${format_mcap(mcap)}\n"
         message += f"*Volume 24h:* ${format_volume(volume)}\n\n"

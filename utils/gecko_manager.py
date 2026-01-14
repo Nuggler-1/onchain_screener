@@ -2,10 +2,13 @@ from curl_cffi.requests import AsyncSession
 from config import GECKO_API_KEY, GECKO_CHAIN_NAMES, CHAIN_NAMES
 from typing import Literal
 from .http_client import HttpClient
+from utils import get_logger
+import json
 
 class Gecko(HttpClient): 
     def __init__(self):
         super().__init__(base_url="https://api.coingecko.com/api/v3/", headers={"x-cg-demo-api-key": GECKO_API_KEY})
+        self.logger = get_logger("GECKO")
 
     def _chain_name_to_gecko(self, chain_name: Literal[*CHAIN_NAMES]):
         return GECKO_CHAIN_NAMES[chain_name]
@@ -13,7 +16,10 @@ class Gecko(HttpClient):
     async def get_token_price_simple(self, chain_name: Literal[*CHAIN_NAMES], token_address: str) -> dict:
         url = f"onchain/simple/networks/{self._chain_name_to_gecko(chain_name)}/token_price/{token_address}"
         data = await self.get_json(url)
-        return float(data.get('data', {}).get('attributes', {}).get("token_prices", {}).get(token_address.lower(), 0))
+        price = float(data.get('data', {}).get('attributes', {}).get("token_prices", {}).get(token_address.lower(), 0))
+        if price == 0:
+            self.logger.warning(f"Token price for {token_address} not found: {json.dumps(data, indent=4)}")
+        return price
     
     async def get_token_data_for_message(self, chain_name: Literal[*CHAIN_NAMES], token_address: str) -> dict:
         url = f"onchain/networks/{self._chain_name_to_gecko(chain_name)}/tokens/{token_address}"

@@ -126,6 +126,8 @@ class BlockListenerEVM:
 
                                 if current_block > last_block:
                                     # Process blocks one at a time to avoid message too big errors
+                                    if current_block - last_block > 5:
+                                        current_block = last_block + 5
                                     for block_num in range(last_block + 1, current_block + 1):
                                         try:
                                             all_logs = await self._get_logs_for_block(block_num)
