@@ -4,7 +4,7 @@ from typing import Dict
 from config import CHAIN_NAMES
 from typing import Literal
 from .log_parser import EventParser
-from config import FILTER_CONFIG, EVENT_TRADE_DIRECTION, BINANCE_ALPHA_WALLETS
+from config import FILTER_CONFIG, EVENT_TRADE_DIRECTION, BINANCE_ALPHA_WALLETS, MIN_PARSED_PRICE_SIZE_TO_CHECK
 from utils import Gecko, get_logger
 
 class EventDetectorEVM:
@@ -46,7 +46,17 @@ class EventDetectorEVM:
                 token_decimals = self.token_data[token_address]['decimals']
                 token_amount_in_transfer = transfer['amount']/10**token_decimals
 
-                price = await self.gecko.get_token_price_simple(self.chain_name, token_address)
+                last_price = self.token_data.get(token_address, {}).get('last_price', 0)
+                if last_price == 0: 
+                    price = await self.gecko.get_token_price_simple(self.chain_name, token_address)
+                else: 
+                    usd_size_cached = last_price*token_amount_in_transfer
+                    if usd_size_cached > MIN_PARSED_PRICE_SIZE_TO_CHECK:
+                        price = await self.gecko.get_token_price_simple(self.chain_name, token_address)
+                    else: 
+                        self.logger.warning(f"{token_address}: Size of an alpha transfer to {wallet_address} is lower than {MIN_PARSED_PRICE_SIZE_TO_CHECK} for cached price")
+                        return {}
+                    
                 usd_size = price * token_amount_in_transfer
 
                 event_config = {}

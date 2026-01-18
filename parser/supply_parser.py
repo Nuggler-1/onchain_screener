@@ -14,6 +14,7 @@ from config import (
     MIN_MCAP, 
     MIN_VOLUME
 )
+from utils import Gecko
 from curl_cffi.requests import AsyncSession
 from web3 import Web3
 from web3 import AsyncWeb3
@@ -89,6 +90,7 @@ class SupplyParser:
         self.main_token_data, self._last_update_time = self._load_token_data()
         self.helper_sol = HelperSOL()
         self.helper_evm = HelperEVM()
+        self.gecko = Gecko()
         self.chain_separated_pool_dict = {}
         self._parser_task = None
         self.headers = {
@@ -363,6 +365,8 @@ class SupplyParser:
                     if chain_name not in list(CMC_PLATFORM_NAMES.keys()):
                         continue
                     chain_name = CMC_PLATFORM_NAMES.get(chain_name)
+                    if chain_name not in CHAIN_NAMES:
+                        continue
                     if chain_name == 'SOLANA':
                         decimals_tasks.append((None, None, None))
                     else: 
@@ -385,9 +389,29 @@ class SupplyParser:
             for result, (address, chain_name) in zip(results, [(address, chain_name) for _, address, chain_name in decimals_tasks if _ is not None]):
                 if result is not None:
                     main_data_dict[chain_name][address]['decimals'] = result
-
                 parsed_tokens += 1
             self.logger.success(f'Processed chunk {i//chunk_size+1}/{len(parsed_token_list)//chunk_size+1}')
+        
+        # Fetch prices in batches
+        bsc_tokens = list(main_data_dict['BSC'].items())
+        self.logger.info(f"Fetching prices for {len(bsc_tokens)} BSC tokens in batches of {CACHE_UPDATE_BATCH_SIZE}")
+        
+        for i in range(0, len(bsc_tokens), CACHE_UPDATE_BATCH_SIZE):
+            batch = bsc_tokens[i:i+CACHE_UPDATE_BATCH_SIZE]
+            price_tasks = [
+                self.gecko.get_token_price_simple('BSC', address)
+                for address, data in batch
+            ]
+            prices = await asyncio.gather(*price_tasks, return_exceptions=True)
+            
+            for (address, data), price in zip(batch, prices):
+                if isinstance(price, Exception):
+                    self.logger.warning(f"Failed to get price for {data['ticker']}: {price}")
+                    main_data_dict['BSC'][address]['last_price'] = 0
+                else:
+                    main_data_dict['BSC'][address]['last_price'] = price
+            
+            self.logger.info(f"Updated prices for batch {i//CACHE_UPDATE_BATCH_SIZE+1}/{(len(bsc_tokens)-1)//CACHE_UPDATE_BATCH_SIZE+1}")
         
         # Обновляем данные в памяти
         self.main_token_data = main_data_dict
