@@ -169,6 +169,31 @@ class SupplyParser:
                     return []
                 self.logger.warning(f"Error getting supported futures for token ID {token_id}: {str(e)}, retrying...")
 
+    async def _get_token_price(self, chain_name: str, address: str, ticker: str) -> float:
+        """
+        Get token price - tries Gecko first, falls back to CMC if no data.
+        Returns price as float, 0 if both fail.
+        """
+        # Try Gecko first
+        try:
+            price = await self.gecko.get_token_price_simple(chain_name, address)
+            if price and price > 0:
+                return price
+        except Exception as e:
+            self.logger.warning(f"Gecko price failed for {ticker}: {e}")
+        
+        # Fallback to CMC
+        try:
+            cmc_data = await self._get_cmc_quote_for_token_ticker(ticker)
+            if cmc_data:
+                price = cmc_data.get('price', 0)
+                if price and price > 0:
+                    return price
+        except Exception as e:
+            self.logger.warning(f"CMC price fallback failed for {ticker}: {e}")
+        
+        return 0
+
     async def _get_cmc_quote_for_token_ticker(self,token_ticker:str): 
         
         url = f"https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest?symbol={token_ticker}&convert=USD"
@@ -461,7 +486,6 @@ class SupplyParser:
             self.logger.success(f'Processed chunk {i//chunk_size+1}/{len(parsed_token_list)//chunk_size+1}')
         
         # Fetch prices in batches
-        #bsc_tokens = list(main_data_dict['BSC'].items())
         for main_data_dict_chain_name, main_data_dict_chain_data in main_data_dict.items():
             chain_tokens = list(main_data_dict_chain_data.items())
             self.logger.info(f"Fetching prices for {len(chain_tokens)} {main_data_dict_chain_name} tokens in batches of {CACHE_UPDATE_BATCH_SIZE}")
@@ -469,7 +493,7 @@ class SupplyParser:
             for i in range(0, len(chain_tokens), CACHE_UPDATE_BATCH_SIZE):
                 batch = chain_tokens[i:i+CACHE_UPDATE_BATCH_SIZE]
                 price_tasks = [
-                    self.gecko.get_token_price_simple(main_data_dict_chain_name, address)
+                    self._get_token_price(main_data_dict_chain_name, address, data['ticker'])
                     for address, data in batch
                 ]
                 prices = await asyncio.gather(*price_tasks, return_exceptions=True)
