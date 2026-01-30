@@ -132,30 +132,31 @@ class TelegramClient:
                 token_amount = signal.get('token_amount', 0)
                 alpha_wallet = signal.get('wallet_address', '')
                 alpha_index_wallet = signal.get('wallet_index', 0)
-                message += f"*Tokens:* {token_amount:.2f}\n" 
-                message += f"*USD total:* ${usd_value:.2f}\n"
+                message += f"*Tokens:* {token_amount:,.2f}\n" 
+                message += f"*USD total:* ${usd_value:,.2f}\n"
                 message += f"*Binance wallet:* [address #{alpha_index_wallet}](https://bscscan.com/address/{alpha_wallet})\n\n"
             case "usd_based_transfer":
                 usd_value = signal.get('usd_amount', 0)
                 token_amount = signal.get('token_amount', 0)
-                message += f"*Tokens:* {token_amount:.2f}\n" 
-                message += f"*USD total:* ${usd_value:.2f}\n\n"
+                message += f"*Tokens:* {token_amount:,.2f}\n" 
+                message += f"*USD total:* ${usd_value:,.2f}\n\n"
             case _:
                 message += f"*Event:* {supply_percent:.2f}% circ. supply *{escape_markdown(event_type).lower()}ed*\n" 
                 message += f"*Trade:* {arrow}\n\n"
         
-        def format_address_with_name(address: str, names: list) -> str:
+        def format_address_with_name(address: str, names_map: dict) -> str:
             short_addr = f"{address[:6]}...{address[-4:]}" if len(address) > 10 else address
             address_url = f"{ARKHAM_URL}address/{address}"
-            if names:
-                return f"*{escape_markdown(names[0])}* ([{short_addr}]({address_url}))"
+            name = names_map.get(address) or names_map.get(address.lower())
+            if name:
+                return f"*{escape_markdown(name)}* ([{short_addr}]({address_url}))"
             return f"[{short_addr}]({address_url})"
         
         from_addresses = signal.get('from_addresses', [])
         to_addresses = signal.get('to_addresses', [])
         filter_matches = signal.get('filter_matches', {})
-        from_names = filter_matches.get('from', []) if filter_matches else []
-        to_names = filter_matches.get('to', []) if filter_matches else []
+        from_names = filter_matches.get('from', {}) if filter_matches else {}
+        to_names = filter_matches.get('to', {}) if filter_matches else {}
         
         if from_addresses or to_addresses:
             message += "*Addresses:*\n"

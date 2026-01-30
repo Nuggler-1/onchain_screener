@@ -153,12 +153,13 @@ class EventFilter:
         
         return matches
     
-    def get_filter_names(self, event_data: dict) -> Dict[str, List[str]]:
-        """Get from/to names for display in alerts"""
+    def get_filter_names(self, event_data: dict) -> Dict[str, Dict[str, str]]:
+        """Get from/to address->name mappings for display in alerts"""
         labels_info = self.get_labels_for_event(event_data)
         
-        from_names = [label for label in labels_info['from'].values() if label]
-        to_names = [label for label in labels_info['to'].values() if label]
+        # Return address->name dicts (only addresses with labels)
+        from_names = {addr: label for addr, label in labels_info['from'].items() if label}
+        to_names = {addr: label for addr, label in labels_info['to'].items() if label}
         
         return {
             'from_names': from_names,
