@@ -113,7 +113,7 @@ class EventDetectorEVM:
             "to_names": filter_names.get('to_names', [])
         }
 
-    async def _filter_event(self, token_address: str, event_type:str, event_data:dict):
+    async def _filter_event(self, tx_hash: str, token_address: str, event_type:str, event_data:dict):
 
         custom_rule = self.custom_rules.get(self.chain_name, {}).get(token_address, {}).get("event_rules",{}).get(event_type)
         auto_open = False
@@ -183,6 +183,17 @@ class EventDetectorEVM:
                 if not (address_filter['from_names'] or address_filter['to_names']):
                     return {}
                 event_config = usd_based_config
+            
+            # Signature blacklist check - only after supply/USD filter passes
+            if self.event_filter.has_signature_filters(event_type):
+                try:
+                    receipt = self.w3.eth.get_transaction_receipt(tx_hash)
+                    sig_matches = self.event_filter.check_signatures_in_receipt(event_type, receipt)
+                    if sig_matches:
+                        return {}
+                except Exception as e:
+                    self.logger.error(f"Error fetching receipt for signature check: {e}")
+            
             auto_open = event_config.get('auto_open')
             message_tier = event_config.get('message_tier') 
 
@@ -249,35 +260,6 @@ class EventDetectorEVM:
             
         """
         
-        event_types_in_tx = set()
-        for token_address, token_events in events.items():
-            for event_type in token_events.keys():
-                event_types_in_tx.add(event_type)
-        
-        needs_signature_check = any(
-            self.event_filter.has_signature_filters(event_type) 
-            for event_type in event_types_in_tx
-        )
-        
-        if needs_signature_check:
-            try:
-                receipt = self.w3.eth.get_transaction_receipt(tx_hash)
-                
-                all_signature_matches = []
-                for event_type in event_types_in_tx:
-                    sig_matches = self.event_filter.check_signatures_in_receipt(event_type, receipt)
-                    all_signature_matches.extend(sig_matches)
-                
-                if all_signature_matches:
-                    return {
-                        "chain_name": self.chain_name,
-                        "tx_hash": tx_hash,
-                        "signals": []
-                    }
-                
-            except Exception as e:
-                self.logger.error(f"Error fetching receipt for {tx_hash}: {e}")
-            
         signals = {
             "chain_name": self.chain_name,
             "tx_hash": tx_hash,
@@ -285,7 +267,7 @@ class EventDetectorEVM:
         }
         for token_address, token_events in events.items():
             for event_type, event_data in token_events.items():
-                signal = await self._filter_event(token_address, event_type, event_data)
+                signal = await self._filter_event(tx_hash, token_address, event_type, event_data)
                 if signal:
                     signals['signals'].append(signal)
         
