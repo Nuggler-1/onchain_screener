@@ -23,7 +23,7 @@ class Runner:
         
         self.rules_manager = RulesManager()
         self.token_parser = SupplyParser()
-        self.tg_client = TelegramClient()
+        self.tg_client = TelegramClient(supply_parser=self.token_parser)
         self.detectors: Dict[str, EventDetectorEVM] = {}
         self.listeners: Dict[str, BlockListenerEVM] = {}
         self.ws_client: WebsocketClient = None
@@ -76,6 +76,11 @@ class Runner:
         for chain_name, detector in self.detectors.items():
             detector.update_custom_rules(self.custom_rules)
         self.logger.info(f"Updated custom rules for {len(self.detectors)} detectors")
+    
+    def reload_filters(self):
+        for chain_name, detector in self.detectors.items():
+            detector.reload_filters()
+        self.logger.info(f"Reloaded filters for {len(self.detectors)} detectors")
 
     def update_token_address_list(self):
         for chain_name, listener in self.listeners.items():

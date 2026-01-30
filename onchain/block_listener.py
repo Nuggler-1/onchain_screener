@@ -1,7 +1,7 @@
 from .log_parser import EventParser
 from web3 import AsyncWeb3
 from typing import Callable, Literal
-from config import CHAIN_NAMES, WS_RPC
+from config import CHAIN_NAMES, WS_RPC, RECONNECT_ATTEMPTS
 from utils import get_logger
 import asyncio
 import json
@@ -93,7 +93,7 @@ class BlockListenerEVM:
         
         ws_url = WS_RPC[self.chain_name]
         reconnect_delay = 5
-        
+        reconnect_attempts = 0
         while True:
             try:
                 async with websockets.connect(ws_url, ping_interval=20, ping_timeout=30) as ws:
@@ -153,6 +153,14 @@ class BlockListenerEVM:
             except (websockets.ConnectionClosed, websockets.ConnectionClosedError, ConnectionResetError) as e:
                 self.logger.warning(f"WebSocket disconnected: {str(e)}. Reconnecting in {reconnect_delay}s...")
                 await asyncio.sleep(reconnect_delay)
+                reconnect_attempts += 1
+                if reconnect_attempts >= RECONNECT_ATTEMPTS:
+                    self.logger.error(f"Max reconnect attempts reached for {self.chain_name}")
+                    await self.tg_client.send_error_alert(
+                        "BLOCK SUBSCRIPTION ERROR",
+                        f"{self.chain_name} Max reconnect attempts reached"
+                    )
+                    break
             except Exception as e:
                 self.logger.error(f"Error in subscribe_new_blocks: {str(e)}")
                 await self.tg_client.send_error_alert(
@@ -160,6 +168,7 @@ class BlockListenerEVM:
                     f"{self.chain_name} Error: {str(e)}"
                 )
                 await asyncio.sleep(reconnect_delay)
+
       
         
         

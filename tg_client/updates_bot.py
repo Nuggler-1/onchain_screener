@@ -8,7 +8,7 @@ from parser import SupplyParser
 from utils import get_logger
 from typing import Optional
 from config import ALERT_TG_BOT_TOKEN, TECH_ALERTS_CHAT_ID, USER_ALERTS_CHAT_ID
-from .consts import DEXSCREENER_BASE_URL, SCAN_URL, DEX_URL, MEXC_URL, BYBIT_URL, BITGET_URL, GATE_URL
+from .consts import ARKHAM_URL, DEXSCREENER_BASE_URL, SCAN_URL, OKX_DEX_URL, futures_link_map
 import asyncio
 from datetime import datetime
 import re
@@ -28,7 +28,8 @@ class TelegramClient:
         self, 
         bot_token: Optional[str] = ALERT_TG_BOT_TOKEN, 
         tech_alerts: Optional[str] = TECH_ALERTS_CHAT_ID,
-        user_alerts: Optional[str] = USER_ALERTS_CHAT_ID
+        user_alerts: Optional[str] = USER_ALERTS_CHAT_ID,
+        supply_parser: Optional[SupplyParser] = None
     ):
         self.logger = get_logger("TG_CLIENT")
         self.bot_token = bot_token
@@ -38,6 +39,7 @@ class TelegramClient:
         self._status_message_id = None
         self._status_monitor_task = None
         self.gecko = Gecko()
+        self.supply_parser = supply_parser
 
         if self.enabled:
             self.bot = Bot(token=self.bot_token)
@@ -71,7 +73,10 @@ class TelegramClient:
             "event_type": event_type,
             "supply_percent": supply_percent_in_action,
             "auto_open": auto_open, 
-            "message_tier": message_tier
+            "message_tier": message_tier,
+            "from_addresses": [list of addresses],
+            "to_addresses": [list of addresses],
+            "filter_matches": {"from": [names], "to": [names]}
         }
         """
         def format_mcap(value: float) -> str:
@@ -98,42 +103,76 @@ class TelegramClient:
         # mcap = token_data.get('mcap', 0)
         # volume = token_data.get('volume', 0)
         ticker = signal.get('ticker', '')
+        chain = signal.get('chain', '')
+        contract = signal.get('contract', '')
+
+        supported_futures = self.supply_parser.main_token_data.get(chain.upper(), {}).get(contract, {}).get('supported_futures', []) 
+        token_data = await self.supply_parser._get_cmc_quote_for_token_ticker(ticker)
         
-        token_data = await SupplyParser()._get_cmc_quote_for_token_ticker(ticker)
         mcap = token_data.get('market_cap',0)
         if not mcap: 
             mcap = token_data.get("fully_diluted_market_cap", 0)
         price = token_data.get('price', 0)
         volume = token_data.get('volume_24h', 0)
 
-        chain = signal.get('chain', '')
         direction = signal.get('direction', '')
         event_type = signal.get('event_type', '')
         supply_percent = signal.get('supply_percent', 0) * 100
-        tx_url = f"{SCAN_URL.get(chain.upper(), '')}{signal.get('tx_hash', '')}"
+        tx_url = f"{ARKHAM_URL}tx/{signal.get('tx_hash', '')}"
         dexscreener_url = f"{DEXSCREENER_BASE_URL}/{chain}/{signal.get('contract', '')}"
-        dex_url = f"{DEX_URL.get(chain.upper(), '')}"
-        mexc_url = f"{MEXC_URL}{ticker.upper()}_USDT"
-        bybit_url = f"{BYBIT_URL}{ticker.upper()}USDT"
-        bitget_url = f"{BITGET_URL}{ticker.upper()}USDT"
-        gate_url = f"{GATE_URL}{ticker.upper()}_USDT"
 
         arrow = "BUY ↗️" if direction.lower() == "long" else "SELL ↘️"
         message_tier = signal.get('message_tier', '')
         
         message = ""
         message += f"*{escape_markdown(message_tier)}* | `{escape_markdown(ticker).upper()}` | {escape_markdown(chain.upper())}\n\n"
-        if event_type == "binance_alpha":
-            usd_value = signal.get('usd_amount', 0)
-            token_amount = signal.get('token_amount', 0)
-            alpha_wallet = signal.get('wallet_address', '')
-            alpha_index_wallet = signal.get('wallet_index', 0)
-            message += f"*Tokens:* {token_amount:.2f}\n" 
-            message += f"*USD total:* ${usd_value:.2f}\n"
-            message += f"*Binance wallet:* [address #{alpha_index_wallet}](https://bscscan.com/address/{alpha_wallet})\n\n"
-        else:
-            message += f"*Event:* {supply_percent:.2f}% circ. supply *{escape_markdown(event_type).lower()}ed*\n" 
-            message += f"*Trade:* {arrow}\n\n"
+        match event_type: 
+            case "hidden_binance_alpha":
+                usd_value = signal.get('usd_amount', 0)
+                token_amount = signal.get('token_amount', 0)
+                alpha_wallet = signal.get('wallet_address', '')
+                alpha_index_wallet = signal.get('wallet_index', 0)
+                message += f"*Tokens:* {token_amount:.2f}\n" 
+                message += f"*USD total:* ${usd_value:.2f}\n"
+                message += f"*Binance wallet:* [address #{alpha_index_wallet}](https://bscscan.com/address/{alpha_wallet})\n\n"
+            case "usd_based_transfer":
+                usd_value = signal.get('usd_amount', 0)
+                token_amount = signal.get('token_amount', 0)
+                message += f"*Tokens:* {token_amount:.2f}\n" 
+                message += f"*USD total:* ${usd_value:.2f}\n\n"
+            case _:
+                message += f"*Event:* {supply_percent:.2f}% circ. supply *{escape_markdown(event_type).lower()}ed*\n" 
+                message += f"*Trade:* {arrow}\n\n"
+        
+        def format_address_with_name(address: str, names: list) -> str:
+            short_addr = f"{address[:6]}...{address[-4:]}" if len(address) > 10 else address
+            address_url = f"{ARKHAM_URL}address/{address}"
+            if names:
+                return f"*{escape_markdown(names[0])}* ([{short_addr}]({address_url}))"
+            return f"[{short_addr}]({address_url})"
+        
+        from_addresses = signal.get('from_addresses', [])
+        to_addresses = signal.get('to_addresses', [])
+        filter_matches = signal.get('filter_matches', {})
+        from_names = filter_matches.get('from', []) if filter_matches else []
+        to_names = filter_matches.get('to', []) if filter_matches else []
+        
+        if from_addresses or to_addresses:
+            message += "*Addresses:*\n"
+            if from_addresses:
+                formatted_from = [format_address_with_name(addr, from_names) for addr in from_addresses[:3]]
+                message += f"  • From: {', '.join(formatted_from)}"
+                if len(from_addresses) > 3:
+                    message += f" (+{len(from_addresses)-3} more)"
+                message += "\n"
+            if to_addresses:
+                formatted_to = [format_address_with_name(addr, to_names) for addr in to_addresses[:3]]
+                message += f"  • To: {', '.join(formatted_to)}"
+                if len(to_addresses) > 3:
+                    message += f" (+{len(to_addresses)-3} more)"
+                message += "\n"
+            message += "\n"
+        
         message += f"*Price:* ${price:.5f}\n"
         message += f"*MCap:* ${format_mcap(mcap)}\n"
         message += f"*Volume 24h:* ${format_volume(volume)}\n\n"
@@ -142,11 +181,32 @@ class TelegramClient:
         message += f"*Contract:* `{signal.get('contract', '')}`\n"
         message += f"*Transaction:* [open link]({tx_url})\n\n"
 
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📊 DexScreener", url=dexscreener_url), InlineKeyboardButton(text="🦄 DEX", url=dex_url)],
-            [InlineKeyboardButton(text="🔵 MEXC", url=mexc_url), InlineKeyboardButton(text="🟡 BYBIT", url=bybit_url)],
-            [InlineKeyboardButton(text="🟢 BITGET", url=bitget_url), InlineKeyboardButton(text="🟣 GATE", url=gate_url)]
-        ])
+        # Build keyboard dynamically based on supported futures
+        keyboard_rows = []
+        
+        # First row: DexScreener and DEX
+        dex_url =f"{OKX_DEX_URL}{chain}/{contract}"
+        first_row = [
+            InlineKeyboardButton(text="📊 DexScreener", url=dexscreener_url),
+            InlineKeyboardButton(text="🦄 DEX", url=dex_url)
+        ]
+        keyboard_rows.append(first_row)
+        
+        # Build futures buttons from supported_futures list
+        if supported_futures:
+            futures_buttons = []
+            for exchange_slug in supported_futures:
+                url, emoji = futures_link_map(exchange_slug, ticker)
+                if url and emoji:
+                    button_text = f"{emoji} {exchange_slug.upper()}"
+                    futures_buttons.append(InlineKeyboardButton(text=button_text, url=url))
+            
+            # Split futures buttons into rows of 2
+            for i in range(0, len(futures_buttons), 2):
+                row = futures_buttons[i:i+2]
+                keyboard_rows.append(row)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
         try:
             await self.bot.send_message(

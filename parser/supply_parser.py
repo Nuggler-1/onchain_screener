@@ -1,6 +1,7 @@
 from typing import Callable
 from config import (
     CMC_PLATFORM_NAMES,
+    CMC_BLACK_LISTS,
     CMC_API_KEY,
     PARSED_DATA_CHECK_DELAY_DAYS, 
     SUPPLY_DATA_PATH, 
@@ -12,7 +13,8 @@ from config import (
     WS_RPC, 
     REQUEST_RETRY,
     MIN_MCAP, 
-    MIN_VOLUME
+    MIN_VOLUME,
+    SUPPORTED_CEX_SLUGS
 )
 from utils import Gecko
 from curl_cffi.requests import AsyncSession
@@ -129,8 +131,46 @@ class SupplyParser:
             data = response.json().get('data').get('cryptoCurrencyList')
         return data
 
-    async def _get_cmc_quote_for_token_ticker(self,token_ticker:str): 
+    async def _get_supported_futures(self, token_id: int) -> list[str]:
+        """
+        Get list of supported futures exchanges for a given token ID.
+        Returns list of exchange slugs that match SUPPORTED_CEX_SLUGS.
+        """
+        url = f'https://api.coinmarketcap.com/data-api/v3/cryptocurrency/market-pairs/latest?id={token_id}&start=1&limit=100&category=perpetual&sort=name&direction=desc&spotUntracked=true'
+        
+        for _ in range(REQUEST_RETRY): 
+            try:
+                async with AsyncSession() as session: 
+                    response = await session.get(url, headers=self.headers)
+                    response.raise_for_status()
+                    data = response.json().get('data', {})
+                    
+                    if not data:
+                        self.logger.warning(f"No data returned from CMC for token ID {token_id}")
+                        return []
+                    
+                    market_pairs = data.get('marketPairs', [])
+                    if not market_pairs:
+                        return []
+                    
+                    # Extract exchange slugs and filter by supported list
+                    supported_exchanges = []
+                    for pair in market_pairs:
+                        exchange_slug = pair.get('exchangeSlug', '').lower()
+                        if exchange_slug in SUPPORTED_CEX_SLUGS:
+                            if exchange_slug not in supported_exchanges:
+                                supported_exchanges.append(exchange_slug)
+                    
+                    return supported_exchanges
+                    
+            except Exception as e:
+                if _ == REQUEST_RETRY - 1: 
+                    self.logger.error(f"Error getting supported futures for token ID {token_id}: {str(e)}")
+                    return []
+                self.logger.warning(f"Error getting supported futures for token ID {token_id}: {str(e)}, retrying...")
 
+    async def _get_cmc_quote_for_token_ticker(self,token_ticker:str): 
+        
         url = f"https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest?symbol={token_ticker}&convert=USD"
         headers = {
             'X-CMC_PRO_API_KEY': CMC_API_KEY,
@@ -303,13 +343,25 @@ class SupplyParser:
         for search_list_name, search_list in CMC_SEARCH_LISTS.items():
             self.logger.info(f'Fetching tokens list for {search_list_name}')
             token_list += await self._search_query(1, search_list['limit'], additional_params=search_list['params'])
+
+        #blacklist 
+        black_list = []
+        for search_list_name, search_list in CMC_BLACK_LISTS.items():
+            self.logger.info(f'Fetching tokens list for {search_list_name}')
+            black_list += await self._search_query(1, search_list['limit'], additional_params=search_list['params'])
+        raw_token_blacklist_dict = {token['id']: token for token in black_list}
+        blacklist_token_ids = [token['id'] for token in raw_token_blacklist_dict.values()]
         
         raw_token_dict = {token['id']: token for token in token_list}
         unique_tokens = list(raw_token_dict.values())
+        
+        # Filter tokens by mcap/volume
         parsed_token_list = []
         for token in unique_tokens:
             mcap = 0
             volume = 0
+            if token.get('id') in blacklist_token_ids: 
+                continue
             for quote in token.get('quotes',[]): 
                 if quote.get("name", '') == "USD": 
                     mcap = quote.get('marketCap')
@@ -318,15 +370,13 @@ class SupplyParser:
                 continue
             if not (mcap > MIN_MCAP and volume >MIN_VOLUME): 
                 continue
-            parsed_token_list.append( 
-                {
-                    'id': token.get('id'),
-                    'name': token.get('name'),
-                    'symbol': token.get('symbol'),
-                    'circulating_supply': max(int(token.get('circulatingSupply')), int(token.get('selfReportedCirculatingSupply'))),
-                    'total_supply': token.get('totalSupply'),
-                }
-            )
+            parsed_token_list.append({
+                'id': token.get('id'),
+                'name': token.get('name'),
+                'symbol': token.get('symbol'),
+                'circulating_supply': max(int(token.get('circulatingSupply')), int(token.get('selfReportedCirculatingSupply'))),
+                'total_supply': token.get('totalSupply')
+            })
 
         self.logger.info(f'Parsed {len(parsed_token_list)} tokens')
 
@@ -345,6 +395,10 @@ class SupplyParser:
             data = await self._get_cmc_tokens_data_by_ids(ids)
             if not data:
                 continue
+            
+            # Collect futures tasks for this chunk
+            futures_tasks = [(self._get_supported_futures(token.get('id')), token.get('id')) for token in chunk]
+            
             decimals_tasks = []
             for token in chunk:
                 id = token.get('id')
@@ -380,38 +434,54 @@ class SupplyParser:
                         'circulating_supply': token.get('circulating_supply'),
                         'total_supply': token.get('total_supply'),
                         'token_address': address,
-                        'cmc_id': token.get('id'),
+                        'cmc_id': token.get('id')
                     }
                     parsed_contracts += 1
 
-            self.logger.info(f"{len(decimals_tasks)} decimals tasks")
-            results = await asyncio.gather(*[task for task, _ , _ in decimals_tasks if task is not None])
-            for result, (address, chain_name) in zip(results, [(address, chain_name) for _, address, chain_name in decimals_tasks if _ is not None]):
-                if result is not None:
+            # Execute decimals and futures tasks in parallel
+            self.logger.info(f"{len(decimals_tasks)} decimals tasks, {len(futures_tasks)} futures tasks")
+            decimals_results = await asyncio.gather(*[task for task, _ , _ in decimals_tasks if task is not None], return_exceptions=True)
+            futures_results = await asyncio.gather(*[task for task, _ in futures_tasks], return_exceptions=True)
+            
+            # Process decimals results
+            for result, (address, chain_name) in zip(decimals_results, [(address, chain_name) for _, address, chain_name in decimals_tasks if _ is not None]):
+                if result is not None and not isinstance(result, Exception):
                     main_data_dict[chain_name][address]['decimals'] = result
                 parsed_tokens += 1
+            
+            # Process futures results and add to all addresses for this token
+            for (_, token_id), supported_futures in zip(futures_tasks, futures_results):
+                if isinstance(supported_futures, Exception) or not supported_futures:
+                    continue
+                # Add supported_futures to all addresses for this token_id
+                for chain_name, chain_data in main_data_dict.items():
+                    for address, token_info in chain_data.items():
+                        if token_info.get('cmc_id') == token_id:
+                            token_info['supported_futures'] = supported_futures
             self.logger.success(f'Processed chunk {i//chunk_size+1}/{len(parsed_token_list)//chunk_size+1}')
         
         # Fetch prices in batches
-        bsc_tokens = list(main_data_dict['BSC'].items())
-        self.logger.info(f"Fetching prices for {len(bsc_tokens)} BSC tokens in batches of {CACHE_UPDATE_BATCH_SIZE}")
-        
-        for i in range(0, len(bsc_tokens), CACHE_UPDATE_BATCH_SIZE):
-            batch = bsc_tokens[i:i+CACHE_UPDATE_BATCH_SIZE]
-            price_tasks = [
-                self.gecko.get_token_price_simple('BSC', address)
-                for address, data in batch
-            ]
-            prices = await asyncio.gather(*price_tasks, return_exceptions=True)
+        #bsc_tokens = list(main_data_dict['BSC'].items())
+        for main_data_dict_chain_name, main_data_dict_chain_data in main_data_dict.items():
+            chain_tokens = list(main_data_dict_chain_data.items())
+            self.logger.info(f"Fetching prices for {len(chain_tokens)} {main_data_dict_chain_name} tokens in batches of {CACHE_UPDATE_BATCH_SIZE}")
             
-            for (address, data), price in zip(batch, prices):
-                if isinstance(price, Exception):
-                    self.logger.warning(f"Failed to get price for {data['ticker']}: {price}")
-                    main_data_dict['BSC'][address]['last_price'] = 0
-                else:
-                    main_data_dict['BSC'][address]['last_price'] = price
-            
-            self.logger.info(f"Updated prices for batch {i//CACHE_UPDATE_BATCH_SIZE+1}/{(len(bsc_tokens)-1)//CACHE_UPDATE_BATCH_SIZE+1}")
+            for i in range(0, len(chain_tokens), CACHE_UPDATE_BATCH_SIZE):
+                batch = chain_tokens[i:i+CACHE_UPDATE_BATCH_SIZE]
+                price_tasks = [
+                    self.gecko.get_token_price_simple(main_data_dict_chain_name, address)
+                    for address, data in batch
+                ]
+                prices = await asyncio.gather(*price_tasks, return_exceptions=True)
+                
+                for (address, data), price in zip(batch, prices):
+                    if isinstance(price, Exception):
+                        self.logger.warning(f"Failed to get price for {data['ticker']}: {price}")
+                        main_data_dict[main_data_dict_chain_name][address]['last_price'] = 0
+                    else:
+                        main_data_dict[main_data_dict_chain_name][address]['last_price'] = price
+                
+                self.logger.info(f"Updated prices for batch {i//CACHE_UPDATE_BATCH_SIZE+1}/{(len(chain_tokens)-1)//CACHE_UPDATE_BATCH_SIZE+1}")
         
         # Обновляем данные в памяти
         self.main_token_data = main_data_dict
