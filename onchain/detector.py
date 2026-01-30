@@ -179,8 +179,8 @@ class EventDetectorEVM:
                 usd_based_config = self._get_event_config(event_type, token_amount_in_event, usd_size)
                 if not usd_based_config:
                     return {}
-                # usd_based_transfer requires address name matches
-                if not (address_filter['from_names'] or address_filter['to_names']):
+                # usd_based_transfer requires 'to' address name match
+                if not address_filter['to_names']:
                     return {}
                 event_config = usd_based_config
             

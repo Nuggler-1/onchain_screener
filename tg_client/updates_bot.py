@@ -149,7 +149,7 @@ class TelegramClient:
             address_url = f"{ARKHAM_URL}address/{address}"
             name = names_map.get(address) or names_map.get(address.lower())
             if name:
-                return f"*{escape_markdown(name)}* ([{short_addr}]({address_url}))"
+                return f"*{name}* ([{short_addr}]({address_url}))"
             return f"[{short_addr}]({address_url})"
         
         from_addresses = signal.get('from_addresses', [])
