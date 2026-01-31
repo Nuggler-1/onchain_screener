@@ -475,6 +475,7 @@ class SupplyParser:
                 parsed_tokens += 1
             
             # Process futures results and add to all addresses for this token
+            chunk_token_ids = set(token.get('id') for token in chunk)
             tokens_with_futures = set()
             for (_, token_id), supported_futures in zip(futures_tasks, futures_results):
                 if isinstance(supported_futures, Exception) or not len(supported_futures):
@@ -486,16 +487,19 @@ class SupplyParser:
                         if token_info.get('cmc_id') == token_id:
                             token_info['supported_futures'] = supported_futures
             
-            # Remove tokens without supported_futures
+            # Remove tokens from THIS CHUNK that don't have futures
+            tokens_without_futures = chunk_token_ids - tokens_with_futures
+            removed_count = 0
             for chain_name in list(main_data_dict.keys()):
                 addresses_to_remove = [
                     addr for addr, info in main_data_dict[chain_name].items()
-                    if info.get('cmc_id') not in tokens_with_futures
+                    if info.get('cmc_id') in tokens_without_futures
                 ]
                 for addr in addresses_to_remove:
                     del main_data_dict[chain_name][addr]
+                    removed_count += 1
             
-            self.logger.success(f'Processed chunk {i//chunk_size+1}/{len(parsed_token_list)//chunk_size+1}, removed {len(addresses_to_remove)} tokens without futures')
+            self.logger.success(f'Processed chunk {i//chunk_size+1}/{len(parsed_token_list)//chunk_size+1}, removed {removed_count} tokens without futures')
         
         # Fetch prices in batches
         for main_data_dict_chain_name, main_data_dict_chain_data in main_data_dict.items():
