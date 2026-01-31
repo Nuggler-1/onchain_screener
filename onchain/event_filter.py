@@ -1,7 +1,6 @@
 import os
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
-from config import EXCHANGE_NAMES_FOR_SELF_TRANSFER_FILTER
 
 
 class EventFilter:
@@ -11,7 +10,6 @@ class EventFilter:
         self.filters_base_path = filters_base_path
         self.filters = {}
         self.address_labels: Dict[str, str] = {}
-        self.exchange_names = [name.lower() for name in EXCHANGE_NAMES_FOR_SELF_TRANSFER_FILTER]
         self._ensure_directories()
         self.reload_filters()
     
@@ -90,33 +88,27 @@ class EventFilter:
             'to': to_labels
         }
     
-    def _extract_exchange_name(self, label: str) -> Optional[str]:
-        """Extract exchange name from label if it matches any known exchange"""
-        if not label:
-            return None
-        label_lower = label.lower()
-        for exchange in self.exchange_names:
-            if exchange in label_lower:
-                return exchange
-        return None
-    
     def is_exchange_self_transfer(self, event_data: dict) -> bool:
         """
         Check if event is an exchange self-transfer.
-        Returns True if any from address and to address share the same exchange label.
+        Compares first word of sender name to first word of receiver name.
+        e.g. "Binance 14" -> "Binance" matches "Binance 5" -> "Binance"
         """
         labels_info = self.get_labels_for_event(event_data)
         
-        from_exchanges = set()
+        # Get first words from sender names
+        from_first_words = set()
         for addr, label in labels_info['from'].items():
-            exchange = self._extract_exchange_name(label)
-            if exchange:
-                from_exchanges.add(exchange)
+            if label:
+                first_word = label.split()[0].lower()
+                from_first_words.add(first_word)
         
+        # Check if any receiver first word matches sender first word
         for addr, label in labels_info['to'].items():
-            exchange = self._extract_exchange_name(label)
-            if exchange and exchange in from_exchanges:
-                return True
+            if label:
+                first_word = label.split()[0].lower()
+                if first_word in from_first_words:
+                    return True
         
         return False
     
