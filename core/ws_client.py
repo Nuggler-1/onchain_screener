@@ -1,6 +1,8 @@
 import asyncio
 import json
 import websockets
+from datetime import datetime, timezone
+from pathlib import Path
 from config import SIGNAL_WS_URL, RECONNECT_ATTEMPTS, RECONNECT_DELAY
 from utils import get_logger
 from onchain import BlockListenerEVM
@@ -17,6 +19,8 @@ class WebsocketClient:
         self.ws = None
         self._connected = False
         self._message_queue: asyncio.Queue = asyncio.Queue()
+        self._signals_file = Path("database/signals_history.json")
+        self._signals_file.parent.mkdir(parents=True, exist_ok=True)
 
     def add_listener(self, chain_name: str, listener: BlockListenerEVM):
         self.listeners[chain_name] = listener
@@ -25,6 +29,27 @@ class WebsocketClient:
     def add_detector(self, chain_name: str, detector: EventDetectorEVM):
         self.detectors[chain_name] = detector
         self.logger.info(f"Added detector for {chain_name}")
+
+    def _save_signal(self, signal: dict):
+        """Append signal to JSON history file."""
+        signal_entry = {
+            **signal,
+            'saved_at': datetime.now(timezone.utc).isoformat()
+        }
+        
+        # Load existing signals or start fresh
+        signals = []
+        if self._signals_file.exists():
+            try:
+                with open(self._signals_file, 'r', encoding='utf-8') as f:
+                    signals = json.load(f)
+            except (json.JSONDecodeError, Exception):
+                signals = []
+        
+        signals.append(signal_entry)
+        
+        with open(self._signals_file, 'w', encoding='utf-8') as f:
+            json.dump(signals, f, indent=2, default=str)
 
     async def _send_signal(self, message: dict):
         """Queue a message to be sent to the WS server"""
@@ -124,6 +149,7 @@ class WebsocketClient:
                     signal['chain'] = chain_name.lower()
                     signal['tx_hash'] = tx_hash
                     await self.tg_client.send_alert(signal)
+                    self._save_signal(signal)
                 return
             except Exception as e:
                 self.logger.error(f"Error in callback for {chain_name}: {e}")
