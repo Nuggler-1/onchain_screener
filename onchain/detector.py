@@ -248,7 +248,7 @@ class EventDetectorEVM:
             tx_hash: str,
             signals: list[
                 {
-                   "direction": Literal['long', 'short'],
+                    "direction": Literal['long', 'short'],
                     "ticker": str,
                     "contract": str,
                     "event_type": Literal['mint', 'burn', 'transfer', 'claim'],

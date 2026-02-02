@@ -169,54 +169,59 @@ class SupplyParser:
                     return []
                 self.logger.warning(f"Error getting supported futures for token ID {token_id}: {str(e)}, retrying...")
 
-    async def _get_token_price(self, chain_name: str, address: str, ticker: str) -> float:
+    async def _get_token_price(self, chain_name: str, address: str, ticker: str, cmc_id: int = None) -> float:
         """
-        Get token price - tries Gecko first, falls back to CMC if no data.
+        Get token price - tries Gecko first, falls back to CMC by ID if no data.
         Returns price as float, 0 if both fail.
         """
         # Try Gecko first
         try:
             price = await self.gecko.get_token_price_simple(chain_name, address)
             if price and price > 0:
+                self.logger.debug(f"fetched Gecko price for {ticker}: {price}")
                 return price
         except Exception as e:
             self.logger.warning(f"Gecko price failed for {ticker}: {e}")
         
-        # Fallback to CMC
-        try:
-            cmc_data = await self._get_cmc_quote_for_token_ticker(ticker)
-            if cmc_data:
-                price = cmc_data.get('price', 0)
+        # Fallback to CMC by ID (not ticker - multiple tokens can share same ticker)
+        if cmc_id:
+            try:
+                price = await self._get_cmc_price_by_id(cmc_id)
                 if price and price > 0:
+                    self.logger.debug(f"fetched CMC price for {ticker}: {price}")
                     return price
-        except Exception as e:
-            self.logger.warning(f"CMC price fallback failed for {ticker}: {e}")
+            except Exception as e:
+                self.logger.warning(f"CMC price fallback failed for {ticker} (id={cmc_id}): {e}")
         
         return 0
-
-    async def _get_cmc_quote_for_token_ticker(self,token_ticker:str): 
-        
-        url = f"https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest?symbol={token_ticker}&convert=USD"
+    
+    async def _get_cmc_price_by_id(self, cmc_id: int) -> float:
+        """Get token price from CMC using cmc_id (more reliable than ticker)."""
+        quote = await self._get_cmc_quote_by_id(cmc_id)
+        return quote.get('price', 0)
+    
+    async def _get_cmc_quote_by_id(self, cmc_id: int) -> dict:
+        """Get full quote data (price, market_cap, volume) from CMC using cmc_id."""
+        url = f"https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest?id={cmc_id}&convert=USD"
         headers = {
             'X-CMC_PRO_API_KEY': CMC_API_KEY,
             'Accept': 'application/json'
         }
-        for _ in range(REQUEST_RETRY): 
+        for _ in range(REQUEST_RETRY):
             try:
-                async with AsyncSession() as session: 
+                async with AsyncSession() as session:
                     response = await session.get(url, headers=headers)
                     response.raise_for_status()
-                    data = response.json().get('data', {}).get(token_ticker.upper(), {})
-                    if len(data) < 1: 
-                        self.logger.error(f"No data returned from cmc")
+                    data = response.json().get('data', {}).get(str(cmc_id), {})
+                    if not data:
                         return {}
-                    data = data[0].get('quote', {}).get('USD',{})
-                    return data
+                    return data.get('quote', {}).get('USD', {})
             except Exception as e:
-                if _ == REQUEST_RETRY - 1: 
-                    self.logger.error(f"Error getting CMC token data by ticker: {str(e)}")
+                if _ == REQUEST_RETRY - 1:
+                    self.logger.error(f"Error getting CMC quote by id {cmc_id}: {str(e)}")
                     return {}
-                self.logger.warning(f"Error getting CMC token data by ticker: {str(e)}")
+                self.logger.warning(f"Error getting CMC quote by id {cmc_id}: {str(e)}, retrying...")
+        return {}
         
     async def _get_cmc_tokens_data_by_ids(self, token_ids: list):
 
@@ -509,7 +514,7 @@ class SupplyParser:
             for i in range(0, len(chain_tokens), CACHE_UPDATE_BATCH_SIZE):
                 batch = chain_tokens[i:i+CACHE_UPDATE_BATCH_SIZE]
                 price_tasks = [
-                    self._get_token_price(main_data_dict_chain_name, address, data['ticker'])
+                    self._get_token_price(main_data_dict_chain_name, address, data['ticker'], data.get('cmc_id'))
                     for address, data in batch
                 ]
                 prices = await asyncio.gather(*price_tasks, return_exceptions=True)

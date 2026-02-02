@@ -100,16 +100,21 @@ class TelegramClient:
 
         #token_data = await self.gecko.get_token_data_for_message(signal['chain'].upper(), signal['contract'])
         # price = token_data.get('price', 0)
-        # mcap = token_data.get('mcap', 0)
-        # volume = token_data.get('volume', 0)
         ticker = signal.get('ticker', '')
         chain = signal.get('chain', '')
         contract = signal.get('contract', '')
 
-        supported_futures = self.supply_parser.main_token_data.get(chain.upper(), {}).get(contract, {}).get('supported_futures', []) 
-        token_data = await self.supply_parser._get_cmc_quote_for_token_ticker(ticker)
+        cached_token_data = self.supply_parser.main_token_data.get(chain.upper(), {}).get(contract, {})
+        supported_futures = cached_token_data.get('supported_futures', [])
+        cmc_id = cached_token_data.get('cmc_id')
         
-        mcap = token_data.get('market_cap',0)
+        # Get fresh price/mcap/volume from CMC using cmc_id
+        if cmc_id:
+            token_data = await self.supply_parser._get_cmc_quote_by_id(cmc_id)
+        else:
+            token_data = {}
+        
+        mcap = token_data.get('market_cap', 0)
         if not mcap: 
             mcap = token_data.get("fully_diluted_market_cap", 0)
         price = token_data.get('price', 0)
