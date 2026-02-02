@@ -174,6 +174,16 @@ class SupplyParser:
         Get token price - tries Gecko first, falls back to CMC by ID if no data.
         Returns price as float, 0 if both fail.
         """
+        # Try Gecko first
+        try:
+            price = await self.gecko.get_token_price_simple(chain_name, address)
+            if price and price > 0:
+                self.logger.debug(f"fetched Gecko price for {ticker}: {price}")
+                return price
+        except Exception as e:
+            self.logger.warning(f"Gecko price failed for {ticker}: {e}")
+        
+        # Fallback to CMC by ID (not ticker - multiple tokens can share same ticker)
         if cmc_id:
             try:
                 price = await self._get_cmc_price_by_id(cmc_id)
@@ -182,14 +192,6 @@ class SupplyParser:
                     return price
             except Exception as e:
                 self.logger.warning(f"CMC price fallback failed for {ticker} (id={cmc_id}): {e}")
-
-        try:
-            price = await self.gecko.get_token_price_simple(chain_name, address)
-            if price and price > 0:
-                self.logger.debug(f"fetched Gecko price for {ticker}: {price}")
-                return price
-        except Exception as e:
-            self.logger.warning(f"Gecko price failed for {ticker}: {e}")
         
         return 0
     
