@@ -4,7 +4,6 @@ from typing import Literal
 from .http_client import HttpClient
 from utils import get_logger
 import json
-
 class Gecko(HttpClient): 
     def __init__(self):
         super().__init__(base_url="https://pro-api.coingecko.com/api/v3/", headers={"x-cg-pro-api-key": GECKO_API_KEY})
@@ -14,9 +13,9 @@ class Gecko(HttpClient):
         return GECKO_CHAIN_NAMES[chain_name]
 
     async def get_token_price_simple(self, chain_name: Literal[*CHAIN_NAMES], token_address: str) -> dict:
-        url = f"onchain/simple/networks/{self._chain_name_to_gecko(chain_name)}/token_price/{token_address}"
+        url = f"simple/token_price/{self._chain_name_to_gecko(chain_name)}?contract_addresses={token_address}&vs_currencies=usd"
         data = await self.get_json(url)
-        price = data.get('data', {}).get('attributes', {}).get("token_prices", {}).get(token_address.lower(), 0)
+        price = data.get(token_address.lower(), {}).get("usd", 0)
         if price is None or price == 0:
             self.logger.warning(f"Token price for {token_address} not found: {json.dumps(data, indent=4)}")
             return 0
