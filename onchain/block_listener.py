@@ -97,7 +97,7 @@ class BlockListenerEVM:
         while True:
             try:
                 async with websockets.connect(ws_url, ping_interval=20, ping_timeout=30) as ws:
-                    
+                    reconnect_attempts = 0
                     subscribe_msg = {
                         "jsonrpc": "2.0",
                         "id": 1,
