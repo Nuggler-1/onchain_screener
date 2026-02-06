@@ -10,6 +10,7 @@ class EventFilter:
         self.filters_base_path = filters_base_path
         self.filters = {}
         self.address_labels: Dict[str, str] = {}
+        self.multisig_addresses: set = set()
         self._ensure_directories()
         self.reload_filters()
     
@@ -47,6 +48,24 @@ class EventFilter:
         
         return result
     
+    def _load_address_set(self, file_path: str) -> set:
+        """Load a file with one address per line into a set"""
+        result = set()
+        if not os.path.exists(file_path):
+            return result
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    result.add(line.lower())
+        except Exception as e:
+            print(f"Error loading address set file {file_path}: {e}")
+        
+        return result
+    
     def reload_filters(self):
         event_types = ['transfer', 'mint', 'burn']
         
@@ -62,6 +81,10 @@ class EventFilter:
         # Load address labels
         labels_path = os.path.join(self.filters_base_path, 'address_labels.txt')
         self.address_labels = self._load_filter_file(labels_path)
+        
+        # Load multisig addresses
+        multisig_path = os.path.join(self.filters_base_path, 'multisig_addresses.txt')
+        self.multisig_addresses = self._load_address_set(multisig_path)
     
     def get_address_label(self, address: str) -> Optional[str]:
         """Get label for an address from dict"""
@@ -111,6 +134,36 @@ class EventFilter:
                     return True
         
         return False
+    
+    def is_multisig_address(self, address: str) -> bool:
+        """Check if address is a multisig wallet"""
+        return address.lower() in self.multisig_addresses
+    
+    def check_multisig_transfer(self, event_data: dict) -> Dict[str, any]:
+        """
+        Check multisig involvement in transfers.
+        Returns: {'ignore': bool, 'from_multisig': bool}
+        - ignore=True if ANY transfer goes TO a multisig
+        - from_multisig=True if ANY transfer comes FROM a multisig (and not going to multisig)
+        """
+        to_multisig = False
+        from_multisig = False
+        
+        for transfer in event_data.get('transfers', []):
+            to_addr = transfer.get('to', '')
+            from_addr = transfer.get('from', '')
+            
+            if to_addr and self.is_multisig_address(to_addr):
+                to_multisig = True
+                break  # Any transfer to multisig = ignore whole event
+            
+            if from_addr and self.is_multisig_address(from_addr):
+                from_multisig = True
+        
+        return {
+            'ignore': to_multisig,
+            'from_multisig': from_multisig and not to_multisig
+        }
     
     def has_signature_filters(self, event_type: str) -> bool:
         if event_type not in self.filters:

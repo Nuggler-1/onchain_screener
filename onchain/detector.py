@@ -98,19 +98,35 @@ class EventDetectorEVM:
     async def _address_filter(self, event_type:str, event_data:dict):
         """
         Filter events and get address labels.
+        - Filters out transfers TO multisig addresses
+        - Labels transfers FROM multisig as "DAO multisig"
         - Filters out exchange self-transfers (same exchange in from and to)
         - Returns address labels for display
         """
+        # Check for multisig involvement
+        multisig_check = self.event_filter.check_multisig_transfer(event_data)
+        if multisig_check['ignore']:
+            return None  # Transfer going TO multisig - ignore
+        
         # Check for exchange self-transfers
         if self.event_filter.is_exchange_self_transfer(event_data):
             return None
         
         # Get address labels for display
         filter_names = self.event_filter.get_filter_names(event_data)
+        from_names = filter_names.get('from_names', {})
+        to_names = filter_names.get('to_names', {})
+        
+        # If transfer is FROM multisig, add "DAO multisig" label to from addresses
+        if multisig_check['from_multisig']:
+            for transfer in event_data.get('transfers', []):
+                from_addr = transfer.get('from', '')
+                if from_addr and self.event_filter.is_multisig_address(from_addr):
+                    from_names[from_addr] = "DAO multisig"
 
         return {
-            "from_names": filter_names.get('from_names', []),
-            "to_names": filter_names.get('to_names', [])
+            "from_names": from_names,
+            "to_names": to_names
         }
 
     async def _filter_event(self, tx_hash: str, token_address: str, event_type:str, event_data:dict):

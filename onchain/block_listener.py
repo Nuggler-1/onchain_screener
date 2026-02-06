@@ -122,7 +122,7 @@ class BlockListenerEVM:
                             if "number" in result:
                                 current_block = int(result["number"], 16)
                                 
-                                self.logger.debug(f"getting data for blocks: {last_block} - {current_block}")
+                                t1 = time.perf_counter()
 
                                 if current_block > last_block:
                                     # Process blocks one at a time to avoid message too big errors
@@ -137,6 +137,8 @@ class BlockListenerEVM:
                                                 if tx_hash not in all_txs:
                                                     all_txs[tx_hash] = []
                                                 all_txs[tx_hash].append(log)
+                                            t2 = time.perf_counter()
+                                            self.logger.debug(f"got data for block {block_num} in {(t2-t1)*1000:.2f}ms")
                                             for tx_hash, tx_logs in all_txs.items():
                                                 events = EventParser.parse_tx_token_events_from_logs(tx_logs)
                                                 if events:
