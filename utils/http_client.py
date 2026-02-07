@@ -16,6 +16,17 @@ class HttpClient:
         self.headers = headers or {}
         self.timeout = timeout
         self.logger = get_logger("HTTP")
+        self._session: Optional[AsyncSession] = None
+
+    async def _get_session(self) -> AsyncSession:
+        if self._session is None:
+            self._session = AsyncSession()
+        return self._session
+
+    async def close(self):
+        if self._session:
+            await self._session.close()
+            self._session = None
 
     async def _request(
         self,
@@ -32,14 +43,14 @@ class HttpClient:
         
         while True:
             try:
-                async with AsyncSession() as session:
-                    response = await session.request(
-                        method=method,
-                        url=full_url,
-                        headers=merged_headers,
-                        timeout=self.timeout,
-                        **kwargs,
-                    )
+                session = await self._get_session()
+                response = await session.request(
+                    method=method,
+                    url=full_url,
+                    headers=merged_headers,
+                    timeout=self.timeout,
+                    **kwargs,
+                )
                 
                 if response.status_code == 429:
                     rate_limit_attempts += 1
