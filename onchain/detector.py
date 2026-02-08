@@ -1,12 +1,12 @@
 from tg_client import TelegramClient
-
+from parser import SupplyParser
 from typing import Dict
 from config import CHAIN_NAMES, RPC
 from typing import Literal
 from .log_parser import EventParser
 from .event_filter import EventFilter
 from config import FILTER_CONFIG, EVENT_TRADE_DIRECTION, BINANCE_ALPHA_WALLETS, MIN_PARSED_PRICE_SIZE_TO_CHECK
-from utils import Gecko, get_logger
+from utils import get_logger
 from web3 import Web3
 
 class EventDetectorEVM:
@@ -15,13 +15,14 @@ class EventDetectorEVM:
         tg_client:TelegramClient,
         chain_name:Literal[*CHAIN_NAMES],
         token_data: dict,
-        custom_rules: dict
+        custom_rules: dict,
+        supply_parser: SupplyParser
     ):
         self.tg_client = tg_client
         self.chain_name = chain_name
         self.token_data = token_data[self.chain_name]
         self.custom_rules = custom_rules
-        self.gecko = Gecko()
+        self.supply_parser = supply_parser
         self.logger = get_logger(chain_name)
         self.event_filter = EventFilter()
         self.w3 = Web3(Web3.HTTPProvider(RPC[chain_name]))
@@ -57,7 +58,7 @@ class EventDetectorEVM:
                 token_decimals = self.token_data[token_address]['decimals']
                 token_amount_in_transfer = transfer['amount']/10**token_decimals
 
-                usd_size = await self._check_usd_size_transfer(token_address, event_type, event_data, MIN_PARSED_PRICE_SIZE_TO_CHECK, wallet_address)
+                usd_size, _ = await self._check_usd_size_transfer(token_address, event_type, event_data, MIN_PARSED_PRICE_SIZE_TO_CHECK, wallet_address)
                 event_config = self._get_event_config(event_type, token_amount_in_transfer, usd_size)
                 
                 if not event_config:
@@ -80,20 +81,22 @@ class EventDetectorEVM:
 
     async def _check_usd_size_transfer(self, token_address: str, event_type:str, event_data:dict, min_cached_size:float, wallet_to:str):
         last_price = self.token_data.get(token_address, {}).get('last_price', 0)
+        ticker = self.token_data.get(token_address, {}).get('ticker', '')
+        cmc_id = self.token_data.get(token_address, {}).get('cmc_id')
         token_amount_in_event = event_data['total']/10**self.token_data[token_address]['decimals']
         if last_price == 0: 
-            price = await self.gecko.get_token_price_simple(self.chain_name, token_address)
+            price = await self.supply_parser._get_token_price(self.chain_name, token_address, ticker, cmc_id)
             usd_size = price * token_amount_in_event
-            return usd_size
+            return usd_size, price
         else: 
             usd_size_cached = last_price*token_amount_in_event
             if usd_size_cached > min_cached_size:
-                price = await self.gecko.get_token_price_simple(self.chain_name, token_address)
+                price = await self.supply_parser._get_token_price(self.chain_name, token_address, ticker, cmc_id)
                 usd_size = price * token_amount_in_event
-                return usd_size
+                return usd_size, price
             else: 
                 #self.logger.warning(f"{event_type}: token {self.token_data[token_address]['ticker']}: Size of a transfer to {wallet_to} is lower than {min_cached_size} for cached price")
-                return 0
+                return 0, 0
 
     async def _address_filter(self, event_type:str, event_data:dict):
         """
@@ -185,7 +188,6 @@ class EventDetectorEVM:
                 circ_supply = self.token_data[token_address]['total_supply']
             ticker = self.token_data[token_address]['ticker'] 
             trade_direction = self._get_event_trade_direction(event_type)
-            initial_price = 0  # Will be set for usd_based_transfer
 
             supply_percent_in_action = token_amount_in_event / circ_supply
             event_config = self._get_event_config(event_type,supply_percent_in_action)
@@ -194,16 +196,12 @@ class EventDetectorEVM:
                 # usd_based_transfer requires exchange address in 'to' (not just any labeled address)
                 if not self.event_filter.has_exchange_in_to(event_data):
                     return {}
-                usd_size = await self._check_usd_size_transfer(token_address, event_type, event_data, MIN_PARSED_PRICE_SIZE_TO_CHECK, "0x0...000")
+                usd_size, initial_price = await self._check_usd_size_transfer(token_address, event_type, event_data, MIN_PARSED_PRICE_SIZE_TO_CHECK, "0x0...000")
                 event_type = "usd_based_transfer"
                 usd_based_config = self._get_event_config(event_type, token_amount_in_event, usd_size)
                 if not usd_based_config:
                     return {}
                 event_config = usd_based_config
-                
-                # Get current price for price tracking
-                initial_price = await self.gecko.get_token_price_simple(self.chain_name, token_address)
-            
             # Signature blacklist check - only after supply/USD filter passes
             if self.event_filter.has_signature_filters(event_type):
                 try:

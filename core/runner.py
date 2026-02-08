@@ -55,6 +55,7 @@ class Runner:
                 chain_name=chain_name,
                 token_data=self.token_data,
                 custom_rules=self.custom_rules,
+                supply_parser=self.token_parser
             )
             self.detectors[chain_name] = detector
             self.ws_client.add_detector(chain_name, detector)
