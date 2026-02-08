@@ -9,7 +9,8 @@ class EventFilter:
     def __init__(self, filters_base_path: str = 'database/filters'):
         self.filters_base_path = filters_base_path
         self.filters = {}
-        self.address_labels: Dict[str, str] = {}
+        self.exchange_addresses: Dict[str, str] = {}  # Triggers usd_based_transfer
+        self.entity_addresses: Dict[str, str] = {}    # Only labels, no trigger
         self.multisig_addresses: set = set()
         self._ensure_directories()
         self.reload_filters()
@@ -78,17 +79,34 @@ class EventFilter:
                 )
             }
         
-        # Load address labels
-        labels_path = os.path.join(self.filters_base_path, 'address_labels.txt')
-        self.address_labels = self._load_filter_file(labels_path)
+        # Load exchange addresses (trigger usd_based_transfer)
+        exchange_path = os.path.join(self.filters_base_path, 'exchange_addresses.txt')
+        self.exchange_addresses = self._load_filter_file(exchange_path)
+        
+        # Load entity addresses (only labels)
+        entity_path = os.path.join(self.filters_base_path, 'entity_addresses.txt')
+        self.entity_addresses = self._load_filter_file(entity_path)
         
         # Load multisig addresses
         multisig_path = os.path.join(self.filters_base_path, 'multisig_addresses.txt')
         self.multisig_addresses = self._load_address_set(multisig_path)
     
     def get_address_label(self, address: str) -> Optional[str]:
-        """Get label for an address from dict"""
-        return self.address_labels.get(address.lower())
+        """Get label for an address (checks both exchange and entity)"""
+        addr_lower = address.lower()
+        return self.exchange_addresses.get(addr_lower) or self.entity_addresses.get(addr_lower)
+    
+    def is_exchange_address(self, address: str) -> bool:
+        """Check if address is an exchange address (triggers usd_based_transfer)"""
+        return address.lower() in self.exchange_addresses
+    
+    def has_exchange_in_to(self, event_data: dict) -> bool:
+        """Check if any 'to' address is an exchange address"""
+        for transfer in event_data.get('transfers', []):
+            to_addr = transfer.get('to', '')
+            if to_addr and self.is_exchange_address(to_addr):
+                return True
+        return False
     
     def get_labels_for_event(self, event_data: dict) -> Dict[str, Dict[str, Optional[str]]]:
         """
@@ -114,24 +132,32 @@ class EventFilter:
     def is_exchange_self_transfer(self, event_data: dict) -> bool:
         """
         Check if event is an exchange self-transfer.
+        Only checks EXCHANGE addresses (not entity addresses).
         Compares first word of sender name to first word of receiver name.
         e.g. "Binance 14" -> "Binance" matches "Binance 5" -> "Binance"
         """
-        labels_info = self.get_labels_for_event(event_data)
-        
-        # Get first words from sender names
+        # Get first words from EXCHANGE sender addresses only
         from_first_words = set()
-        for addr, label in labels_info['from'].items():
-            if label:
-                first_word = label.split()[0].lower()
-                from_first_words.add(first_word)
+        for transfer in event_data.get('transfers', []):
+            from_addr = transfer.get('from', '')
+            if from_addr:
+                label = self.exchange_addresses.get(from_addr.lower())
+                if label:
+                    first_word = label.split()[0].lower()
+                    from_first_words.add(first_word)
         
-        # Check if any receiver first word matches sender first word
-        for addr, label in labels_info['to'].items():
-            if label:
-                first_word = label.split()[0].lower()
-                if first_word in from_first_words:
-                    return True
+        if not from_first_words:
+            return False
+        
+        # Check if any EXCHANGE receiver first word matches sender first word
+        for transfer in event_data.get('transfers', []):
+            to_addr = transfer.get('to', '')
+            if to_addr:
+                label = self.exchange_addresses.get(to_addr.lower())
+                if label:
+                    first_word = label.split()[0].lower()
+                    if first_word in from_first_words:
+                        return True
         
         return False
     

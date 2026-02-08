@@ -185,20 +185,24 @@ class EventDetectorEVM:
                 circ_supply = self.token_data[token_address]['total_supply']
             ticker = self.token_data[token_address]['ticker'] 
             trade_direction = self._get_event_trade_direction(event_type)
+            initial_price = 0  # Will be set for usd_based_transfer
 
             supply_percent_in_action = token_amount_in_event / circ_supply
             event_config = self._get_event_config(event_type,supply_percent_in_action)
 
             if not event_config: #not supply filter check usd based filter
+                # usd_based_transfer requires exchange address in 'to' (not just any labeled address)
+                if not self.event_filter.has_exchange_in_to(event_data):
+                    return {}
                 usd_size = await self._check_usd_size_transfer(token_address, event_type, event_data, MIN_PARSED_PRICE_SIZE_TO_CHECK, "0x0...000")
                 event_type = "usd_based_transfer"
                 usd_based_config = self._get_event_config(event_type, token_amount_in_event, usd_size)
                 if not usd_based_config:
                     return {}
-                # usd_based_transfer requires 'to' address name match
-                if not address_filter['to_names']:
-                    return {}
                 event_config = usd_based_config
+                
+                # Get current price for price tracking
+                initial_price = await self.gecko.get_token_price_simple(self.chain_name, token_address)
             
             # Signature blacklist check - only after supply/USD filter passes
             if self.event_filter.has_signature_filters(event_type):
@@ -237,6 +241,13 @@ class EventDetectorEVM:
                 "from": address_filter['from_names'],
                 "to": address_filter['to_names']
             }
+        
+        # Add price tracking info for usd_based_transfer
+        if event_type == "usd_based_transfer":
+            signal["initial_price"] = initial_price
+            signal["price_check_delay_minutes"] = event_config.get('price_check_delay_minutes', 5)
+            signal["price_drop_threshold_percent"] = event_config.get('price_drop_threshold_percent', 3)
+            signal["cmc_id"] = self.token_data.get(token_address, {}).get('cmc_id')
         
         return signal
 

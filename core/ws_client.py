@@ -3,11 +3,12 @@ import json
 import websockets
 from datetime import datetime, timezone
 from pathlib import Path
-from config import SIGNAL_WS_URL, RECONNECT_ATTEMPTS, RECONNECT_DELAY
+from config import SIGNAL_WS_URL, RECONNECT_ATTEMPTS, RECONNECT_DELAY, USER_ALERTS_CHAT_ID
 from utils import get_logger
 from onchain import BlockListenerEVM
 from onchain import EventDetectorEVM
 from tg_client import TelegramClient
+from .price_tracker import PriceTracker, PendingPriceCheck
 
 
 class WebsocketClient:
@@ -21,6 +22,19 @@ class WebsocketClient:
         self._message_queue: asyncio.Queue = asyncio.Queue()
         self._signals_file = Path("database/signals_history.json")
         self._signals_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize price tracker with callback
+        self.price_tracker = PriceTracker(self._on_price_drop)
+    
+    async def _on_price_drop(self, pending: PendingPriceCheck, new_price: float, drop_percent: float):
+        """Callback when price drop is detected"""
+        await self.tg_client.reply_price_drop(
+            message_id=pending.message_id,
+            ticker=pending.ticker,
+            initial_price=pending.initial_price,
+            new_price=new_price,
+            drop_percent=drop_percent
+        )
 
     def add_listener(self, chain_name: str, listener: BlockListenerEVM):
         self.listeners[chain_name] = listener
@@ -148,8 +162,27 @@ class WebsocketClient:
                     self.logger.info(f"Signal detected: {signal['ticker']} {signal['event_type']} on {chain_name}")
                     signal['chain'] = chain_name.lower()
                     signal['tx_hash'] = tx_hash
-                    await self.tg_client.send_alert(signal)
+                    message_id = await self.tg_client.send_alert(signal)
                     self._save_signal(signal)
+                    
+                    # Schedule price check for usd_based_transfer signals
+                    if signal.get('event_type') == 'usd_based_transfer' and message_id:
+                        delay_minutes = signal.get('price_check_delay_minutes', 5)
+                        threshold_percent = signal.get('price_drop_threshold_percent', 3)
+                        initial_price = signal.get('initial_price', 0)
+                        
+                        if initial_price > 0:
+                            self.price_tracker.schedule_check(
+                                message_id=message_id,
+                                chat_id=USER_ALERTS_CHAT_ID,
+                                chain=chain_name,
+                                contract=signal['contract'],
+                                ticker=signal['ticker'],
+                                initial_price=initial_price,
+                                delay_minutes=delay_minutes,
+                                threshold_percent=threshold_percent,
+                                cmc_id=signal.get('cmc_id')
+                            )
                 return
             except Exception as e:
                 self.logger.error(f"Error in callback for {chain_name}: {e}")
@@ -177,6 +210,9 @@ class WebsocketClient:
                 "WS connection failed"
             )
             return
+        
+        # Start price tracker for monitoring price drops
+        self.price_tracker.start()
         
         # Start receiver loop after initial connection
         asyncio.create_task(self._receiver_loop())

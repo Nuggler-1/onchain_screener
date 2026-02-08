@@ -215,7 +215,7 @@ class TelegramClient:
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
         try:
-            await self.bot.send_message(
+            sent_message = await self.bot.send_message(
                 chat_id=self.user_alerts,
                 text=message,
                 parse_mode="Markdown",
@@ -223,12 +223,55 @@ class TelegramClient:
                 disable_web_page_preview=True
             )
             self.logger.info(f"Alert sent for {ticker}")
-            return True
+            return sent_message.message_id
         except Exception as e:
             self.logger.error(f"Error sending alert: {e}")
+            return None
+    
+    
+    async def reply_price_drop(
+        self,
+        message_id: int,
+        ticker: str,
+        initial_price: float,
+        new_price: float,
+        drop_percent: float
+    ) -> bool:
+        """
+        Reply to a signal message with price drop information.
+        
+        Args:
+            message_id: Original message ID to reply to
+            ticker: Token ticker symbol
+            initial_price: Price at signal time
+            new_price: Current price
+            drop_percent: Percentage drop (negative value)
+        
+        Returns:
+            True if sent successfully, False otherwise
+        """
+        if not self.enabled:
             return False
-    
-    
+        
+        message = f"📉 *Price Update* for `{escape_markdown(ticker.upper())}`\n\n"
+        message += f"*Initial:* ${initial_price:.6f}\n"
+        message += f"*Current:* ${new_price:.6f}\n"
+        message += f"*Change:* {drop_percent:.2f}%"
+        
+        try:
+            await self.bot.send_message(
+                chat_id=self.user_alerts,
+                text=message,
+                parse_mode="Markdown",
+                reply_to_message_id=message_id,
+                disable_web_page_preview=True
+            )
+            self.logger.info(f"Price drop reply sent for {ticker}: {drop_percent:.2f}%")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error sending price drop reply: {e}")
+            return False
+
     async def send_message(
         self, 
         message: str, 
