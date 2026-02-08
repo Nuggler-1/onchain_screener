@@ -5,10 +5,51 @@ SOFT_NAME = "Onchain Screener"
 EVENT_TRADE_DIRECTION = {
     'transfer': 'short',
     'mint': 'short',
-    'burn': 'long'
+    'burn': 'long',
+    'claim': 'short',
+    'hidden_binance_alpha': 'short',
+    'usd_based_transfer': 'short',
 }
 
 FILTER_CONFIG = {
+    'hidden_binance_alpha': [
+        {
+            "enabled": True, 
+            "min_usd_size": 600_000,
+            "max_usd_size": float("inf"),
+            "message_tier": "🔶 Binance Alpha ",
+            "auto_open": True
+        }
+    ],
+    'usd_based_transfer': [
+        {
+            "enabled": True, 
+            "min_usd_size": 500_000,
+            "max_usd_size": 1_000_000,
+            "message_tier": "💵 MID deposit ",
+            "auto_open": False,
+            "price_check_delay_minutes": 5,
+            "price_drop_threshold_percent": 2
+        },
+        {
+            "enabled": True, 
+            "min_usd_size": 1_000_001,
+            "max_usd_size": 3_000_000,
+            "message_tier": "💰 BIG deposit ",
+            "auto_open": False,
+            "price_check_delay_minutes": 5,
+            "price_drop_threshold_percent": 2
+        },
+        {
+            "enabled": True, 
+            "min_usd_size": 3_000_001,
+            "max_usd_size": float("inf"),
+            "message_tier": "🤑 EXTREME deposit ",
+            "auto_open": False,
+            "price_check_delay_minutes": 5,
+            "price_drop_threshold_percent": 2
+        },
+    ],
     'transfer': [
         {
             "enabled": True, 
@@ -103,14 +144,14 @@ FILTER_CONFIG = {
 
 #============================= TG BOTS SETTINGS ===================================
 
-ALERT_TG_BOT_TOKEN = ''
-TECH_ALERTS_CHAT_ID = ''
-USER_ALERTS_CHAT_ID = ''
+ALERT_TG_BOT_TOKEN = '8441606860:'
+TECH_ALERTS_CHAT_ID = '341122695'
+USER_ALERTS_CHAT_ID = '-1003636568887'
 
-MANAGER_TG_BOT_TOKEN = ''
+MANAGER_TG_BOT_TOKEN = '8441606860:'
 MANAGER_TG_BOT_IDS = [
-    '',
-    #''
+    '341122695',
+    '6393736698'
 ]
 
 #============================= ONCHAIN SETTIGNS ===================================
@@ -120,7 +161,7 @@ RPC = {
     "ETHEREUM": 'https://eth-mainnet.g.alchemy.com/v2/',
     "BSC": 'https://lb.drpc.live/bsc/', 
     "BASE": 'https://lb.drpc.live/base/',
-    "SOLANA": 'https://mainnet.helius-rpc.com/?api-key=',
+    "SOLANA": 'https://mainnet.helius-rpc.com/?api-key=----',
 }
 
 
@@ -132,6 +173,13 @@ WS_RPC = {
     "SOLANA": '',#соль без поддержки вебсокета пока
 }
 
+
+BINANCE_ALPHA_WALLETS = [
+    #"0x55469e9db22b64dc3e058a1182df8c43d2887c6c"
+    "0x73d8bd54f7cf5fab43fe4ef40a62d390644946db", #1
+    "0xb5893a55965a4a01c239f852d93ac47942415231" #2
+]
+
 EVENT_SIGNATURES = [
     '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' #трансфер
 ]
@@ -142,7 +190,7 @@ CHAIN_NAMES = {
     'ARBITRUM',
     'BSC',
     'BASE',
-    'SOLANA'
+    #'SOLANA'
 }
 
 
@@ -150,7 +198,7 @@ CHAIN_NAMES = {
 
 
 #------WS SETTINGS
-SIGNAL_WS_URL = "ws://localhost:8765"
+SIGNAL_WS_URL = "ws://:8000/ws_in"
 RECONNECT_ATTEMPTS = 10
 RECONNECT_DELAY = 5
 
@@ -165,6 +213,11 @@ ERROR_429_DELAY = 60 #задеркжи при рейтлимите
 
 
 #============================= PARSER SETTINGS ====================================
+
+MIN_MCAP = 1_000_000
+MIN_VOLUME = 100_000
+
+MIN_PARSED_PRICE_SIZE_TO_CHECK = 200_000
 
 PARSED_DATA_CHECK_DELAY_DAYS = 1 #раз в сколько дней обновлять данные 
 FORCE_UPDATE_ON_START = False #обновить данные пулов для евм/соланы на запуске 
@@ -185,42 +238,59 @@ CMC_SEARCH_LISTS = {
         "params": 'exchangeIds=544',
         "limit": 2500
     },
-    "base top 300": {
-        "params": 'platformId=199',
-        "limit": 300
+    "binance": {
+        "params": 'exchangeIds=270',
+        "limit": 700
     },
-    "bsc top 500": {
-        "params": 'platformId=1839',
-        "limit": 300
-    },
-    "arbitrum top 200": {
-        "params": 'platformId=11841',
-        "limit": 200
-    },
-    "eth top 500": {
-        "params": 'platformId=1027',
-        "limit": 500
-    }
 }
-
 #------GECKO DATA
 
 GECKO_API_KEY = ''
 GECKO_CHAIN_NAMES = {
-    'ETHEREUM': 'eth',
+    'ETHEREUM': 'ethereum',
     'SOLANA': 'solana',
-    'BSC': 'bsc',
-    'ARBITRUM': 'arbitrum',
+    'BSC': 'binance-smart-chain',
+    'ARBITRUM': 'arbitrum-one',
     'BASE': 'base'
 }
 
+SUPPORTED_CEX_SLUGS = [
+    'binance',
+    'bybit',
+    'kucoin',
+    'okx',
+    'bitget',
+    'gate',
+    'mexc'
+]
+
+CMC_SEARCH_LISTS = {
+    "mexc": {
+        "params": 'exchangeIds=544',
+        "limit": 2500
+    },
+    "binance": {
+        "params": 'exchangeIds=270',
+        "limit": 700
+    },
+}
+CMC_BLACK_LISTS = {
+    "stables": {
+        "params": 'tagSlugs=stablecoin',
+        "limit": 700
+    }, 
+    "stocks": {
+        "params": 'tagSlugs=tokenized-stock',
+        "limit": 700
+    }
+}
 #=============================FILE PATHS========================================
 
 TOKEN_DATA_BASE_PATH = 'database/'
 
 CUSTOM_RULES_PATH = TOKEN_DATA_BASE_PATH + 'custom_rules.json'
-BANNED_PATH = TOKEN_DATA_BASE_PATH + 'banned.json'
 
+BANNED_PATH = TOKEN_DATA_BASE_PATH + 'banned.json'
 SUPPLY_DATA_PATH = TOKEN_DATA_BASE_PATH + 'token_data.json'
 LAST_CHECK_PATH = TOKEN_DATA_BASE_PATH + 'last_check.txt'
 
