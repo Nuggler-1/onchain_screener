@@ -5,7 +5,7 @@ from config import CHAIN_NAMES, RPC
 from typing import Literal
 from .log_parser import EventParser
 from .event_filter import EventFilter
-from config import FILTER_CONFIG, EVENT_TRADE_DIRECTION, BINANCE_ALPHA_WALLETS, MIN_PARSED_PRICE_SIZE_TO_CHECK
+from config import FILTER_CONFIG, EVENT_TRADE_DIRECTION, BINANCE_ALPHA_WALLETS, MIN_PARSED_PRICE_SIZE_TO_CHECK, DEBUG_LOGGING   
 from utils import get_logger
 from web3 import Web3
 
@@ -62,7 +62,8 @@ class EventDetectorEVM:
                 event_config = self._get_event_config(event_type, token_amount_in_transfer, usd_size)
                 
                 if not event_config:
-                    self.logger.warning(f"No config found for binance alpha event: usd_size={usd_size}, supply_percent_in_action={token_amount_in_transfer}, wallet_address={wallet_address}")
+                    if DEBUG_LOGGING:
+                        self.logger.warning(f"No config found for binance alpha event: usd_size={usd_size}, supply_percent_in_action={token_amount_in_transfer}, wallet_address={wallet_address}")
                     return {}
                 
                 return {

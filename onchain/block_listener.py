@@ -1,7 +1,7 @@
 from .log_parser import EventParser
 from web3 import AsyncWeb3
 from typing import Callable, Literal
-from config import CHAIN_NAMES, WS_RPC, RECONNECT_ATTEMPTS
+from config import CHAIN_NAMES, WS_RPC, RECONNECT_ATTEMPTS, DEBUG_LOGGING   
 from utils import get_logger
 import asyncio
 import json
@@ -138,7 +138,8 @@ class BlockListenerEVM:
                                                     all_txs[tx_hash] = []
                                                 all_txs[tx_hash].append(log)
                                             t2 = time.perf_counter()
-                                            self.logger.debug(f"got data for block {block_num} in {(t2-t1)*1000:.2f}ms")
+                                            if DEBUG_LOGGING:
+                                                self.logger.debug(f"got data for block {block_num} in {(t2-t1)*1000:.2f}ms")
                                             for tx_hash, tx_logs in all_txs.items():
                                                 events = EventParser.parse_tx_token_events_from_logs(tx_logs)
                                                 if events:
@@ -147,7 +148,8 @@ class BlockListenerEVM:
                                         except Exception as e:
                                             self.logger.error(f"Error processing block {block_num}: {str(e)}")
                                             if "message too big" in str(e):
-                                                self.logger.warning(f"Skipping block {block_num} due to message size")
+                                                if DEBUG_LOGGING:
+                                                    self.logger.warning(f"Skipping block {block_num} due to message size")
                                                 last_block = block_num
                                             await asyncio.sleep(0.1)
                                 
