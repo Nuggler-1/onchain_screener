@@ -26,8 +26,8 @@ class EventDetectorEVM:
         self.logger = get_logger(chain_name)
         self.event_filter = EventFilter()
         self.w3 = Web3(Web3.HTTPProvider(RPC[chain_name]))
+        self._gnosis_safe_cache: Dict[str, bool] = {}  # Cache for Gnosis Safe checks
 
-    
     def _get_event_trade_direction(self, event_type:str) -> Literal['long', 'short']: 
         return EVENT_TRADE_DIRECTION.get(event_type, '')
 
@@ -99,18 +99,66 @@ class EventDetectorEVM:
                 #self.logger.warning(f"{event_type}: token {self.token_data[token_address]['ticker']}: Size of a transfer to {wallet_to} is lower than {min_cached_size} for cached price")
                 return 0, 0
 
+    def _is_multisig(self, address: str) -> bool:
+        """
+        Check if address is a multisig wallet.
+        1. First checks preparsed addresses from file
+        2. If not found, checks on-chain via getOwners() (Gnosis Safe)
+        3. If found on-chain, saves to file for future lookups
+        Results are cached to avoid repeated RPC calls.
+        """
+        addr_lower = address.lower()
+        
+        # Check preparsed file first (fastest)
+        if self.event_filter.is_multisig_address(addr_lower):
+            return True
+        
+        # Check cache for on-chain results
+        if addr_lower in self._gnosis_safe_cache:
+            return self._gnosis_safe_cache[addr_lower]
+        
+        try:
+            # Try calling getOwners() - Gnosis Safe specific method
+            # If address is EOA or non-Safe contract, this will throw
+            contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(address),
+                abi=[{"name": "getOwners", "type": "function", "inputs": [], "outputs": [{"type": "address[]"}]}]
+            )
+            owners = contract.functions.getOwners().call()
+            is_safe = len(owners) > 0
+            self._gnosis_safe_cache[addr_lower] = is_safe
+            
+            if is_safe:
+                # Save to file for future lookups
+                self.event_filter.add_multisig_address(addr_lower)
+                self.logger.info(f"Detected & saved Gnosis Safe: {address} with {len(owners)} owners")
+            return is_safe
+        except Exception:
+            self._gnosis_safe_cache[addr_lower] = False
+            return False
+
     async def _address_filter(self, event_type:str, event_data:dict):
         """
         Filter events and get address labels.
-        - Filters out transfers TO multisig addresses
+        - Filters out transfers TO multisig/Gnosis Safe addresses
         - Labels transfers FROM multisig as "DAO multisig"
         - Filters out exchange self-transfers (same exchange in from and to)
         - Returns address labels for display
         """
-        # Check for multisig involvement
-        multisig_check = self.event_filter.check_multisig_transfer(event_data)
-        if multisig_check['ignore']:
-            return None  # Transfer going TO multisig - ignore
+        from_multisig = False
+        
+        # Check all addresses for multisig (preparsed + on-chain Gnosis Safe)
+        for transfer in event_data.get('transfers', []):
+            to_addr = transfer.get('to', '')
+            from_addr = transfer.get('from', '')
+            
+            # Filter out transfers TO multisig
+            if to_addr and self._is_multisig(to_addr):
+                return None
+            
+            # Track if FROM multisig for labeling
+            if from_addr and self._is_multisig(from_addr):
+                from_multisig = True
         
         # Check for exchange self-transfers
         if self.event_filter.is_exchange_self_transfer(event_data):
@@ -121,11 +169,11 @@ class EventDetectorEVM:
         from_names = filter_names.get('from_names', {})
         to_names = filter_names.get('to_names', {})
         
-        # If transfer is FROM multisig, add "DAO multisig" label to from addresses
-        if multisig_check['from_multisig']:
+        # If transfer is FROM multisig, add "DAO multisig" label
+        if from_multisig:
             for transfer in event_data.get('transfers', []):
                 from_addr = transfer.get('from', '')
-                if from_addr and self.event_filter.is_multisig_address(from_addr):
+                if from_addr and self._is_multisig(from_addr):
                     from_names[from_addr] = "DAO multisig"
 
         return {

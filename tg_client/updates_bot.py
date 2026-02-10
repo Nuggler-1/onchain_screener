@@ -147,6 +147,8 @@ class TelegramClient:
                 message += f"*USD total:* ${usd_value:,.2f}\n\n"
             case _:
                 message += f"*Event:* {supply_percent:.2f}% circ. supply *{escape_markdown(event_type).lower()}ed*\n" 
+                usd_value = price * signal.get('token_amount', 0)
+                message += f"*USD total:* ${usd_value:,.2f}\n"
                 message += f"*Trade:* {arrow}\n\n"
         
         def format_address_with_name(address: str, names_map: dict) -> str:

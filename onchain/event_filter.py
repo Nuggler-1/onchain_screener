@@ -165,6 +165,24 @@ class EventFilter:
         """Check if address is a multisig wallet"""
         return address.lower() in self.multisig_addresses
     
+    def add_multisig_address(self, address: str) -> bool:
+        """Add a new multisig address to the set and save to file"""
+        addr_lower = address.lower()
+        if addr_lower in self.multisig_addresses:
+            return False  # Already exists
+        
+        self.multisig_addresses.add(addr_lower)
+        
+        # Append to file
+        multisig_path = os.path.join(self.filters_base_path, 'multisig_addresses.txt')
+        try:
+            with open(multisig_path, 'a', encoding='utf-8') as f:
+                f.write(f"{addr_lower}\n")
+            return True
+        except Exception as e:
+            print(f"Error saving multisig address to file: {e}")
+            return False
+    
     def check_multisig_transfer(self, event_data: dict) -> Dict[str, any]:
         """
         Check multisig involvement in transfers.
