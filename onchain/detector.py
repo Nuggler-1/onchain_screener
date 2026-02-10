@@ -226,9 +226,6 @@ class EventDetectorEVM:
                 return {}
 
         else: 
-            address_filter = await self._address_filter(event_type, event_data)
-            if address_filter is None:
-                return {}
             
             token_decimals = self.token_data[token_address]['decimals']
             token_amount_in_event = event_data['total']/10**token_decimals
@@ -251,6 +248,11 @@ class EventDetectorEVM:
                 if not usd_based_config:
                     return {}
                 event_config = usd_based_config
+
+            address_filter = await self._address_filter(event_type, event_data)
+            if address_filter is None:
+                return {}
+
             # Signature blacklist check - only after supply/USD filter passes
             if self.event_filter.has_signature_filters(event_type):
                 try:
